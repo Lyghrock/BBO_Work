@@ -391,6 +391,7 @@ def run_single_algorithm(
             metric_name="reward",
             step_metric="budget",
         )
+        wandb_logger.flush_pending()
 
     start_time = time.time()
     total_calls = 0
@@ -481,6 +482,7 @@ def run_single_algorithm(
     finally:
         if wandb_logger is not None:
             wandb_logger.finish()
+            wandb_logger.ensure_upload()
 
     if result_manager:
         result_manager.save_final(best_x, best_fx, elapsed_time)

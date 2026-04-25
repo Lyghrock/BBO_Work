@@ -340,6 +340,7 @@ def run_single(
             metric_name='min_fx',
             step_metric='budget',
         )
+        wandb_logger.flush_pending()
 
     try:
         with tqdm(total=budget, desc=f"{algorithm}/mopta08", disable=not verbose) as pbar:
@@ -419,6 +420,7 @@ def run_single(
     finally:
         if wandb_logger is not None:
             wandb_logger.finish()
+            wandb_logger.ensure_upload()
 
     if result_manager is not None:
         result_manager.save_final(
