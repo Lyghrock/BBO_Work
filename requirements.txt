@@ -3,8 +3,7 @@
 
 # ⚠️ PyTorch (CUDA 12.8) - MUST be installed BEFORE other packages
 # Using PyTorch stable with CUDA 12.8 support (v2.7.0+)
-pip install torch torchvision torchaudio \
-    --index-url https://download.pytorch.org/whl/cu128
+pip3 install torch torchvision --index-url https://download.pytorch.org/whl/cu126
 
 # Core scientific computing
 numpy>=1.24.0
