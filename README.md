@@ -389,7 +389,88 @@ mujoco/results/{env_name}/{algorithm}/
 
 ## 四、辅助功能实现
 
-### 4.1 存储逻辑
+### 4.1 wandb 离线容灾机制
+
+本项目的 wandb 上传实现了完整的**离线容灾**，确保断网时不丢失任何数据，也不阻塞训练。
+
+#### 4.1.1 架构概览
+
+```
+log_step() 成功
+    │
+    ├─ wandb.log()              ← 直接上传
+    └─ _flush_fifo(stop_on_fail=True)  ← FIFO 尝试补传旧 pending
+                                            ├─ 遇到失败 → 停止，剩余留文件
+                                            └─ 全部成功 → 文件清空
+
+log_step() 失败（断网）
+    │
+    └─ _append_pending()        ← 追加写入 /tmp/wandb-pending/pending_{origin}.jsonl
+                                  分配全局 FIFO 序号
+        _disabled = True
+        继续训练（不阻塞）
+
+网络恢复后（下次 log_step）
+    │
+    ├─ _disabled = False, _run = None
+    └─ _ensure_run()            ← 重新初始化
+        └─ log_step() 成功      ← 同上，进入补传流程
+```
+
+#### 4.1.2 关键设计
+
+| 机制 | 说明 |
+|------|------|
+| **每个 sub-task 独立 pending 文件** | 路径 `/tmp/wandb-pending/pending_{task}_{algorithm}.jsonl`；不同 sub-task 互不干扰 |
+| **全局 FIFO 序号** | 通过文件锁保护计数器，确保跨 run 的时序正确（step=555 永远在 step=1300 之前上传） |
+| **stop_on_fail** | `flush_pending` 遇到第一次失败立即停止，不阻塞训练；失败的条目保留在文件头部 |
+| **ensure_upload** | sub-task 结束时兜底调用，忽略失败，尝试全部上传 |
+
+#### 4.1.3 生命周期示例
+
+```
+ackley_50d 训练中 (step 555 断网)
+  ├─ step 555-2000 写入 pending_ackley_50d_bo.jsonl
+  └─ 训练继续，不阻塞
+
+ackley_50d 结束，进入 ackley_100d
+  └─ flush_pending()
+       ├─ FIFO 上传 pending_ackley_50d_bo 中的条目
+       ├─ step 555 上传成功
+       ├─ step 1300 上传失败 → stop → 剩余条目留在文件中
+       └─ 继续 ackley_100d 训练
+
+ackley_100d 结束（此时网络恢复）
+  └─ ensure_upload()
+       └─ 尝试上传所有剩余条目（忽略失败）
+```
+
+#### 4.1.4 手动 flush 工具
+
+训练中断后，可通过 CLI 手动尝试上传所有 pending 数据：
+
+```bash
+# 上传所有 pending 数据
+python -c "from utils.wandb_sync import main; import sys; sys.argv = ['','flush-pending','-p','bbo','--entity','hongweijun_jack-peking-university']; main()"
+
+# 只上传指定 origin
+python -c "from utils.wandb_sync import main; import sys; sys.argv = ['','flush-pending','-p','bbo','-o','ackley_50d_bo','--entity','hongweijun_jack-peking-university']; main()"
+
+# dry-run（只打印不上传）
+python -c "from utils.wandb_sync import main; import sys; sys.argv = ['','flush-pending','-p','bbo','--dry-run']; main()"
+```
+
+#### 4.1.5 wandb 参数说明
+
+| 参数 | 说明 |
+|------|------|
+| `--wandb-project` | wandb 项目名（必填，关闭用 `--no-wandb`） |
+| `--wandb-entity` | wandb entity/用户名 |
+| `--wandb-group` | run 分组，建议按 `{base-group}/{bench}/{task}` 组织 |
+| `--wandb-tags` | 标签列表，例：`bo cec ackley 50d run-20250425` |
+| `--no-wandb` | 禁用 wandb 记录（加快调试） |
+
+### 4.3 存储逻辑
 
 `BenchmarkResult` 类管理存储周期：
 
@@ -403,7 +484,7 @@ class BenchmarkResult:
         # 完成后保存 final_result.json
 ```
 
-### 4.2 脚本挂起逻辑
+### 4.4 脚本挂起逻辑
 
 使用Shell的 `nohup` + 后台 `&` + `sh -c "..."` 实现任务链挂起：
 
@@ -425,7 +506,7 @@ nohup sh -c "
 - **任务链**：`20D → 50D → 100D` 顺序执行，共享同一GPU
 - **stdout/stderr重定向**：`.out` 文件捕获输出日志，`.txt` 文件捕获主日志
 
-### 4.3 GPU 调度与跨服务器兼容性
+### 4.5 GPU 调度与跨服务器兼容性
 
 本项目的 GPU 调度**不依赖任何写死的 GPU ID**，在不同服务器上均可自动运行。
 
@@ -484,6 +565,12 @@ Shell (run_bbo.sh)
            │    ├─ nvidia-smi 查询所有GPU内存
            │    ├─ False（默认）：只选 memory_used == 0 的完全空闲GPU
            │    └─ True：允许选有空闲显存但已被占用的GPU
+           ├─ WandbLogger
+           │    ├─ flush_pending()   ← 每个 sub-task 开始时尝试补传旧数据
+           │    ├─ log_step()        ← 直接上传，失败则写 pending 文件
+           │    ├─ finish()          ← 结束 wandb run
+           │    └─ ensure_upload()   ← sub-task 结束时兜底上传所有 pending
+           │         └─ /tmp/wandb-pending/pending_{task}_{algo}.jsonl
            ├─ create_optimizer() → 工厂函数
            │    └─ resolve_device() → 统一设备解析
            │           └─ 算法类 (BO/TuRBO/CMAES/HeSBO/BAxUS/SAASBO/Scalpel)
