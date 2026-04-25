@@ -28,3 +28,5 @@ trial.py
 
 patch_logic_error.md
 reconstruct_prompt.md
+
+.rsyncignore
