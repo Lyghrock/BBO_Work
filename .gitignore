@@ -25,3 +25,6 @@ scalpel/original/
 
 run_benchmark_demo.py
 trial.py
+
+patch_logic_error.md
+reconstruct_prompt.md
