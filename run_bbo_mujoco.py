@@ -8,6 +8,7 @@ BBO Benchmark Script for MuJoCo Environments
 import argparse
 import json
 import os
+import random
 import sys
 import time
 from pathlib import Path
@@ -123,18 +124,15 @@ def get_optimizer_overrides(algorithm: str, dims: int, budget: int) -> Dict:
     return cfg
 
 
-def _combine_run_results(algo_dir: Path, n_runs: int,
+def _combine_run_results(algo_dir: Path, seeds: List[int],
                          problem_name: str, algorithm: str):
-    """读取所有 run_i/progress.json，对齐 step，计算 reward mean±std，
-    保存 combined_progress.json + combined_final_results.json。
-    """
+    """读取所有 seed 的 progress_seed_{N}.json，计算 mean±std，保存 combined 文件。"""
     all_trajs = []
     all_finals = []
 
-    for run_idx in range(n_runs):
-        run_dir = algo_dir / f"run_{run_idx}"
-        prog_file = run_dir / f"progress_{run_idx}.json"
-        final_file = run_dir / f"final_result_{run_idx}.json"
+    for seed in seeds:
+        prog_file = algo_dir / f"progress_seed_{seed}.json"
+        final_file = algo_dir / f"final_result_seed_{seed}.json"
 
         if prog_file.exists():
             with open(prog_file) as f:
@@ -189,7 +187,8 @@ def _combine_run_results(algo_dir: Path, n_runs: int,
         json.dump({
             'problem': problem_name,
             'algorithm': algorithm,
-            'n_runs': n_runs,
+            'n_runs': len(seeds),
+            'seeds': seeds,
             'results': combined_results,
         }, f, indent=2)
 
@@ -205,7 +204,8 @@ def _combine_run_results(algo_dir: Path, n_runs: int,
     agg = {
         'problem': problem_name,
         'algorithm': algorithm,
-        'n_runs': n_runs,
+        'n_runs': len(seeds),
+        'seeds': seeds,
     }
     if final_rewards:
         r_arr = np.array(final_rewards, dtype=float)
@@ -226,14 +226,15 @@ def _combine_run_results(algo_dir: Path, n_runs: int,
 class MuJoCoBenchmarkResult:
 
     def __init__(self, result_dir: str, env_name: str, algorithm: str,
-                 run_index: int = None):
+                 actual_seed: int = None):
         self.result_dir = Path(result_dir)
         self.env_name = env_name
         self.algorithm = algorithm
-        self.run_index = run_index
+        self.actual_seed = actual_seed
 
-        if run_index is not None:
-            self.algo_dir = self.result_dir / env_name / algorithm / f"run_{run_index}"
+        # 多 run 模式：result/{env}/{algorithm}/progress_seed_{N}.json
+        if actual_seed is not None:
+            self.algo_dir = self.result_dir / env_name / algorithm
         else:
             self.algo_dir = self.result_dir / env_name / algorithm
         self.algo_dir.mkdir(parents=True, exist_ok=True)
@@ -275,8 +276,8 @@ class MuJoCoBenchmarkResult:
         if not self.results:
             return
 
-        if self.run_index is not None:
-            result_file = self.algo_dir / f"progress_{self.run_index}.json"
+        if self.actual_seed is not None:
+            result_file = self.algo_dir / f"progress_seed_{self.actual_seed}.json"
         else:
             result_file = self.algo_dir / "progress.json"
 
@@ -284,7 +285,7 @@ class MuJoCoBenchmarkResult:
             json.dump({
                 'env_name': self.env_name,
                 'algorithm': self.algorithm,
-                'run_index': self.run_index,
+                'seed': self.actual_seed,
                 'results': self.results,
                 'total_results': len(self.results),
                 'last_step': self.results[-1]['step'] if self.results else 0,
@@ -292,8 +293,8 @@ class MuJoCoBenchmarkResult:
             }, f, indent=2)
 
     def save_final(self, best_x: np.ndarray, best_fx: float, total_time: float):
-        if self.run_index is not None:
-            final_file = self.algo_dir / f"final_result_{self.run_index}.json"
+        if self.actual_seed is not None:
+            final_file = self.algo_dir / f"final_result_seed_{self.actual_seed}.json"
         else:
             final_file = self.algo_dir / "final_result.json"
 
@@ -302,7 +303,7 @@ class MuJoCoBenchmarkResult:
             json.dump({
                 'env_name': self.env_name,
                 'algorithm': self.algorithm,
-                'run_index': self.run_index,
+                'seed': self.actual_seed,
                 'best_x': best_x.tolist() if best_x is not None else None,
                 'best_reward': best_reward,
                 'best_loss': float(best_fx),
@@ -500,17 +501,19 @@ def run_benchmark(
     use_gpu: bool = True,
     verbose: bool = True,
     single_algorithm: Optional[str] = None,
-    seed: int = None,
+    seeds: List[int] = None,
     use_continuous: bool = True,
     wandb_config: Optional[WandbConfig] = None,
     use_per_env_budget: bool = True,
-    run_times: int = 1,
     allow_occupied: bool = False,
 ):
     """运行完整的 MuJoCo 基准测试
 
     Args:
-        run_times: 重复运行次数（每次使用不同的 seed：0, 1, ..., run_times-1）
+        seeds: 空格分隔的 seed 列表，如 [14, 888, 92, 473, 546]。
+               每个 seed 独立跑一次，结果存为 progress_seed_{N}.json。
+               未传入时，随机生成 5 个 seed。
+        allow_occupied: 是否允许使用有空闲显存但已被占用的 GPU。
     """
     device = None
 
@@ -520,8 +523,12 @@ def run_benchmark(
     if not environments:
         environments = list(MUJOCO_ENVIRONMENTS.keys())
 
-    seeds = list(range(run_times)) if run_times > 1 else ([seed] if seed is not None else [None])
-    n_runs = run_times
+    # seeds 逻辑：传入 seeds > 0 → 每个 seed 独立跑一次；未传入 / [] → 随机生成 1 个
+    if seeds is not None and len(seeds) > 0:
+        actual_seeds = seeds
+    else:
+        actual_seeds = [random.randint(0, 2**31 - 1)]
+    n_runs = len(actual_seeds)
 
     print(f"\n{'='*60}")
     print(f"MuJoCo BBO Benchmark Configuration")
@@ -532,7 +539,7 @@ def run_benchmark(
     print(f"Batch size: {batch_size}")
     print(f"GPU enabled: {use_gpu}")
     print(f"Result directory: {result_dir}")
-    print(f"Run times: {n_runs}  (seeds: {seeds})")
+    print(f"Run times: {n_runs}  (seeds: {actual_seeds})")
     print(f"{'='*60}\n")
 
     for algorithm in algorithms:
@@ -547,16 +554,14 @@ def run_benchmark(
             if use_per_env_budget and env_name in ENV_BUDGETS:
                 effective_budget = ENV_BUDGETS[env_name]
 
-            for run_idx, actual_seed in enumerate(seeds):
-                run_label = f"run_{run_idx}" if n_runs > 1 else "run_0"
-                seed_str = str(actual_seed) if actual_seed is not None else "random"
-                print(f"  [{run_label}] seed={seed_str}")
+            for actual_seed in actual_seeds:
+                print(f"  [seed={actual_seed}]")
 
                 result_manager = MuJoCoBenchmarkResult(
                     result_dir=result_dir,
                     env_name=env_name,
                     algorithm=algorithm,
-                    run_index=run_idx if n_runs > 1 else None,
+                    actual_seed=actual_seed,
                 )
 
                 try:
@@ -576,7 +581,7 @@ def run_benchmark(
                     )
                 except Exception as e:
                     print(f"Error running {algorithm}/{env_name} "
-                          f"[{run_label}] seed={seed_str}: {e}")
+                          f"[seed={actual_seed}]: {e}")
                     import traceback
                     traceback.print_exc()
                     if _is_gpu_unavailable_error(e):
@@ -588,7 +593,7 @@ def run_benchmark(
 
             if n_runs > 1:
                 algo_dir = Path(result_dir) / env_name / algorithm
-                _combine_run_results(algo_dir, n_runs, env_name, algorithm)
+                _combine_run_results(algo_dir, actual_seeds, env_name, algorithm)
                 print(f"  -> combined progress saved to {algo_dir}/combined_progress.json")
 
     print(f"\n{'='*60}")
@@ -668,8 +673,8 @@ def main():
                         help='Total evaluation budget')
     parser.add_argument('--batch', '-bt', type=int, default=1,
                         help='Batch size for suggestions')
-    parser.add_argument('--seed', '-s', type=int, default=None,
-                        help='Random seed for single run (ignored when --run-times > 1)')
+    parser.add_argument('--seed', '-s', type=int, nargs='+', default=None,
+                        help='Space-separated seeds, e.g. "14 888 92 473 546".')
     parser.add_argument('--continuous', action='store_true', default=True,
                         help='Use continuous mode for Scalpel (default: True)')
     parser.add_argument('--discrete', dest='continuous', action='store_false',
@@ -701,9 +706,8 @@ def main():
                         help='Weights & Biases tags')
     parser.add_argument('--no-per-env-budget', action='store_true',
                         help='Disable per-environment budget')
-    parser.add_argument('--run-times', type=int, default=1,
-                        help='Number of repeated runs (default: 1). '
-                             'Each run uses a different seed 0..N-1.')
+    parser.add_argument('--run-times', type=int, default=5,
+                        help='[Deprecated] Number of runs is now determined by --seed count or default 5.')
 
     args = parser.parse_args()
 
@@ -718,6 +722,8 @@ def main():
             tags=args.wandb_tags,
         )
 
+    seeds = args.seed
+
     results = run_benchmark(
         algorithms=args.algorithms,
         environments=environments,
@@ -727,11 +733,10 @@ def main():
         use_gpu=not args.no_gpu,
         verbose=args.verbose,
         single_algorithm=args.single,
-        seed=args.seed,
+        seeds=seeds,
         use_continuous=args.continuous,
         wandb_config=wandb_config,
         use_per_env_budget=not args.no_per_env_budget,
-        run_times=args.run_times,
         allow_occupied=args.use_GPU_occupied,
     )
 

@@ -271,18 +271,43 @@ class FuncWrapper:
 
 ### 3.2 统一存储逻辑
 
-每个 `{算法}/{函数}` 组合产生两个JSON文件：
+**单次运行**（无 `--seed` 或单个 seed）：
 
-| 文件 | 内容 | 存储路径 |
-|------|------|---------|
-| `progress.json` | **覆盖式**存储（每10%更新一次）：`{step, best_fx, elapsed_time}` 数组 | `results/{func}_{dims}d/{algo}/progress.json` |
-| `final_result.json` | 最终结果：最优解 `best_x`、最优值 `best_fx`、总时间、`progress_history` | `results/{func}_{dims}d/{algo}/final_result.json` |
-| `summary.json` | **合并式**汇总：所有算法×函数的最优值 | `results/summary.json` |
+| 文件 | 内容 |
+|------|------|
+| `progress.json` | 覆盖式存储（每10%更新一次）：`{step, best_fx, elapsed_time}` 数组 |
+| `final_result.json` | 最终结果：最优解 `best_x`、最优值 `best_fx`、总时间、`progress_history` |
 
-关键设计：**覆盖式 progress + 合并式 summary**
+**多次运行**（`--seed 14 888 92 473 546`）：
 
-- `progress.json` 每次只保存最新进度（重复运行会覆盖）
-- `summary.json` 读取已有内容后合并新结果（不覆盖已有算法数据）
+| 文件 | 内容 |
+|------|------|
+| `progress_seed_14.json` | seed=14 的进度 |
+| `progress_seed_888.json` | seed=888 的进度 |
+| `progress_seed_92.json` | seed=92 的进度 |
+| `progress_seed_473.json` | seed=473 的进度 |
+| `progress_seed_546.json` | seed=546 的进度 |
+| `final_result_seed_14.json` | seed=14 的最终结果 |
+| `combined_progress.json` | 5 次运行的 mean ± std 收敛曲线 |
+| `combined_final_results.json` | 5 次运行的聚合统计量（mean/std/min/max） |
+
+> `summary.json` 仅在单次运行时更新，多 run 模式以 `combined_final_results.json` 为准。
+
+**目录结构**：
+
+```
+results/
+└── {func}_{dims}d/           # CEC: ackley_20d, hopper, dna, mopta08...
+    └── {algorithm}/
+        ├── progress.json                     # 单次
+        ├── final_result.json                # 单次
+        ├── progress_seed_14.json            # 多 run
+        ├── progress_seed_888.json
+        ├── ...
+        ├── final_result_seed_14.json        # 多 run
+        ├── combined_progress.json            # mean ± std 曲线
+        └── combined_final_results.json       # 聚合统计
+```
 
 ### 3.3 MuJoCo额外存储
 
@@ -478,10 +503,16 @@ Shell (run_bbo.sh)
 # 激活环境
 conda activate BBO_Task
 
-# 完整评测（后台挂起，自动选空闲GPU）
+# 完整评测（默认：6 算法 + 全部 bench + 5 次 run + wandb + GPU 自动分配）
 bash run_bbo.sh
 
-# 只跑 CEC，默认所有算法
+# 指定 5 个 seed（例如 14 888 92 473 546），自动跑 5 次
+bash run_bbo.sh --seed 42
+
+# 不指定 seed，每次运行随机生成 5 个不同的 seed
+bash run_bbo.sh
+
+# 只跑 CEC（默认所有算法：bo turbo cmaes scalpel hesbo baxus saasbo）
 bash run_bbo.sh --cec
 
 # 只跑 MuJoCo，只测 hopper 和 ant
@@ -490,18 +521,29 @@ bash run_bbo.sh --mujoco --env hopper ant
 # 只跑 Lasso，只测 bo 和 turbo
 bash run_bbo.sh --lasso --algo bo turbo
 
-# 多次运行（seeds: 0, 1, ..., K-1）
-bash run_bbo.sh --cec --run-times 5
+# 自定义 seed 数量（这里 10 个 seed）
+bash run_bbo.sh --cec --seed 0 1 2 3 4 5 6 7 8 9
 
-# 允许使用有空闲显存但已被占用的GPU（服务器GPU部分占用时使用）
+# 允许使用有空闲显存但已被占用的 GPU（服务器 GPU 部分占用时使用）
 bash run_bbo.sh --cec --use-GPU-occupied
 
 # 关闭 wandb 日志（加快调试速度）
 bash run_bbo.sh --cec --no-wandb
 
-# 完整示例：跑 MuJoCo hopper + ant，多算法，多 run，关闭 wandb
-bash run_bbo.sh --mujoco --env hopper ant --algo bo turbo cmaes --run-times 3 --no-wandb
+# 完整示例：跑全部 bench，多算法，10 次 run，seed=0，关 wandb
+bash run_bbo.sh --all --algo bo turbo cmaes scalpel hesbo baxus \
+    --seed 0 1 2 3 4 5 6 7 8 9 --no-wandb
 ```
+
+**seed 逻辑说明**：
+
+| 场景 | 行为 |
+|------|------|
+| `--seed` 未指定 | 随机生成 5 个 seed |
+| `--seed 14 888 92 473 546` | 直接使用这 5 个 seed，每个独立跑一次 |
+| `--seed 0 100 200` | 直接使用这 3 个 seed，跑 3 次 |
+
+> **重要**：`--run-times` 已废弃，run 次数由 `--seed` 的数量决定。
 
 ### 6.2 CEC函数Benchmark（独立脚本）
 
@@ -523,8 +565,8 @@ python run_bbo_benchmark.py \
 # 允许占用已有进程的GPU
 python run_bbo_benchmark.py --functions ackley --algorithms bo --use-GPU-occupied
 
-# 多 run 模式
-python run_bbo_benchmark.py --functions ackley --algorithms bo --run-times 5
+# 允许多次运行（5 个 seed）
+python run_bbo_benchmark.py --functions ackley --algorithms bo --seed 0 1 2 3 4
 
 # 关闭 wandb 加速调试
 python run_bbo_benchmark.py --functions ackley --algorithms bo --no-wandb
@@ -542,8 +584,8 @@ python run_bbo_mujoco.py \
 # 允许使用已有进程占用的GPU
 python run_bbo_mujoco.py --environments hopper --algorithms bo --use-GPU-occupied
 
-# 多 run
-python run_bbo_mujoco.py --environments hopper --algorithms bo --run-times 3
+# 允许多次运行（3 个 seed）
+python run_bbo_mujoco.py --environments hopper --algorithms bo --seed 10 20 30
 ```
 
 ### 6.4 Lasso-Bench Benchmark

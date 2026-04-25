@@ -7,6 +7,7 @@ Mopta08 Benchmark Script
 import argparse
 import json
 import os
+import random
 import sys
 import time
 from pathlib import Path
@@ -70,18 +71,15 @@ def get_optimizer_overrides(algorithm: str, dims: int, budget: int) -> Dict:
     return cfg
 
 
-def _combine_run_results(algo_dir: Path, n_runs: int,
+def _combine_run_results(algo_dir: Path, seeds: List[int],
                          problem_name: str, algorithm: str):
-    """读取所有 run_i/progress.json，对齐 step，计算 best_fx mean±std，
-    保存 combined_progress.json + combined_final_results.json。
-    """
+    """读取所有 seed 的 progress_seed_{N}.json，计算 mean±std，保存 combined 文件。"""
     all_trajs = []
     all_finals = []
 
-    for run_idx in range(n_runs):
-        run_dir = algo_dir / f"run_{run_idx}"
-        prog_file = run_dir / f"progress_{run_idx}.json"
-        final_file = run_dir / f"final_result_{run_idx}.json"
+    for seed in seeds:
+        prog_file = algo_dir / f"progress_seed_{seed}.json"
+        final_file = algo_dir / f"final_result_seed_{seed}.json"
 
         if prog_file.exists():
             with open(prog_file) as f:
@@ -135,7 +133,8 @@ def _combine_run_results(algo_dir: Path, n_runs: int,
         json.dump({
             'problem': problem_name,
             'algorithm': algorithm,
-            'n_runs': n_runs,
+            'n_runs': len(seeds),
+            'seeds': seeds,
             'results': combined_results,
         }, f, indent=2)
 
@@ -150,7 +149,8 @@ def _combine_run_results(algo_dir: Path, n_runs: int,
     agg = {
         'problem': problem_name,
         'algorithm': algorithm,
-        'n_runs': n_runs,
+        'n_runs': len(seeds),
+        'seeds': seeds,
     }
     if final_fx:
         fx_arr = np.array(final_fx, dtype=float)
@@ -171,13 +171,14 @@ def _combine_run_results(algo_dir: Path, n_runs: int,
 class BenchmarkResult:
     """Mopta08 结果管理器"""
 
-    def __init__(self, result_dir: str, algorithm: str, run_index: int = None):
+    def __init__(self, result_dir: str, algorithm: str, actual_seed: int = None):
         self.result_dir = Path(result_dir)
         self.algorithm = algorithm
-        self.run_index = run_index
+        self.actual_seed = actual_seed
 
-        if run_index is not None:
-            self.algo_dir = self.result_dir / 'mopta08' / algorithm / f"run_{run_index}"
+        # 多 run 模式：result/mopta08/{algo}/progress_seed_{N}.json
+        if actual_seed is not None:
+            self.algo_dir = self.result_dir / 'mopta08' / algorithm
         else:
             self.algo_dir = self.result_dir / 'mopta08' / algorithm
         self.algo_dir.mkdir(parents=True, exist_ok=True)
@@ -221,8 +222,8 @@ class BenchmarkResult:
         if not self.results:
             return
 
-        if self.run_index is not None:
-            result_file = self.algo_dir / f"progress_{self.run_index}.json"
+        if self.actual_seed is not None:
+            result_file = self.algo_dir / f"progress_seed_{self.actual_seed}.json"
         else:
             result_file = self.algo_dir / "progress.json"
 
@@ -231,7 +232,7 @@ class BenchmarkResult:
                 {
                     'benchmark': 'mopta08',
                     'algorithm': self.algorithm,
-                    'run_index': self.run_index,
+                    'seed': self.actual_seed,
                     'results': self.results,
                 },
                 f,
@@ -247,15 +248,15 @@ class BenchmarkResult:
         best_violations: Optional[int] = None,
         best_max_violation: Optional[float] = None,
     ):
-        if self.run_index is not None:
-            final_file = self.algo_dir / f"final_result_{self.run_index}.json"
+        if self.actual_seed is not None:
+            final_file = self.algo_dir / f"final_result_seed_{self.actual_seed}.json"
         else:
             final_file = self.algo_dir / "final_result.json"
 
         payload = {
             'benchmark': 'mopta08',
             'algorithm': self.algorithm,
-            'run_index': self.run_index,
+            'seed': self.actual_seed,
             'best_x': best_x.tolist() if best_x is not None else None,
             'best_fx': float(best_fx),
             'time': float(total_time),
@@ -451,19 +452,25 @@ def run_benchmark(
     wandb_config: Optional[WandbConfig],
     mopta_executable: Optional[str],
     constraint_penalty: float,
-    seed: int = None,
-    run_times: int = 1,
+    seeds: List[int] = None,
     allow_occupied: bool = False,
 ):
     """运行 Mopta08 基准测试
 
     Args:
-        run_times: 重复运行次数（每次使用不同的 seed：0, 1, ..., run_times-1）
+        seeds: 空格分隔的 seed 列表，如 [14, 888, 92, 473, 546]。
+               每个 seed 独立跑一次，结果存为 progress_seed_{N}.json。
+               未传入时，随机生成 5 个 seed。
+        allow_occupied: 是否允许使用有空闲显存但已被占用的 GPU。
     """
     all_results = {}
 
-    seeds = list(range(run_times)) if run_times > 1 else ([seed] if seed is not None else [None])
-    n_runs = run_times
+    # seeds 逻辑：传入 seeds > 0 → 每个 seed 独立跑一次；未传入 / [] → 随机生成 1 个
+    if seeds is not None and len(seeds) > 0:
+        actual_seeds = seeds
+    else:
+        actual_seeds = [random.randint(0, 2**31 - 1)]
+    n_runs = len(actual_seeds)
 
     print(f"\n{'=' * 50}")
     print('Mopta08 Benchmark')
@@ -471,21 +478,19 @@ def run_benchmark(
     print(f"Algorithms: {algorithms}")
     print(f"Budget: {budget}")
     print(f"Constraint penalty: {constraint_penalty}")
-    print(f"Run times: {n_runs}  (seeds: {seeds})")
+    print(f"Run times: {n_runs}  (seeds: {actual_seeds})")
     print(f"{'=' * 50}\n")
 
     for algo in algorithms:
         print(f"\n--- {algo} ---")
 
-        for run_idx, actual_seed in enumerate(seeds):
-            run_label = f"run_{run_idx}" if n_runs > 1 else "run_0"
-            seed_str = str(actual_seed) if actual_seed is not None else "random"
-            print(f"  [{run_label}] seed={seed_str}")
+        for actual_seed in actual_seeds:
+            print(f"  [seed={actual_seed}]")
 
             result_mgr = BenchmarkResult(
                 result_dir=result_dir,
                 algorithm=algo,
-                run_index=run_idx if n_runs > 1 else None,
+                actual_seed=actual_seed,
             )
 
             try:
@@ -524,7 +529,7 @@ def run_benchmark(
         # generate combined files
         if n_runs > 1:
             algo_dir = Path(result_dir) / 'mopta08' / algo
-            _combine_run_results(algo_dir, n_runs, 'mopta08', algo)
+            _combine_run_results(algo_dir, actual_seeds, 'mopta08', algo)
             print(f"  -> combined progress saved to {algo_dir}/combined_progress.json")
 
     if n_runs == 1:
@@ -587,11 +592,10 @@ def main():
                         help='Weights & Biases tags')
     parser.add_argument('--list', action='store_true',
                         help='List benchmark and executable status')
-    parser.add_argument('--seed', type=int, default=None,
-                        help='Random seed for single run (ignored when --run-times > 1)')
-    parser.add_argument('--run-times', type=int, default=1,
-                        help='Number of repeated runs (default: 1). '
-                             'Each run uses a different seed 0..N-1.')
+    parser.add_argument('--seed', type=int, nargs='+', default=None,
+                        help='Space-separated seeds, e.g. "14 888 92 473 546".')
+    parser.add_argument('--run-times', type=int, default=5,
+                        help='[Deprecated] Number of runs is now determined by --seed count or default 5.')
     args = parser.parse_args()
 
     if args.list:
@@ -607,6 +611,8 @@ def main():
             tags=args.wandb_tags,
         )
 
+    seeds = args.seed
+
     run_benchmark(
         algorithms=args.algorithms,
         budget=args.budget,
@@ -618,8 +624,7 @@ def main():
         wandb_config=wandb_config,
         mopta_executable=args.mopta_executable,
         constraint_penalty=args.constraint_penalty,
-        seed=args.seed,
-        run_times=args.run_times,
+        seeds=seeds,
         allow_occupied=args.use_GPU_occupied,
     )
 

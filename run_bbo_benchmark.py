@@ -7,6 +7,7 @@ BBO Benchmark Script - 测试各种BBO算法在测试函数上的表现
 import argparse
 import json
 import os
+import random
 import sys
 import time
 from pathlib import Path
@@ -120,21 +121,20 @@ def get_optimizer_overrides(algorithm: str, dims: int, budget: int) -> Dict:
     return cfg
 
 
-def _combine_run_results(algo_dir: Path, n_runs: int,
+def _combine_run_results(algo_dir: Path, seeds: List[int],
                          problem_name: str, algorithm: str):
-    """读取所有 run_i/progress.json，对齐 step，计算 mean±std，保存 combined_progress.json。
+    """读取所有 seed 的 progress_seed_{N}.json，对齐 step，计算 mean±std，保存 combined_progress.json。
 
-    同时读取所有 run_i/final_result.json，聚合 best_fx / elapsed_time 的统计量，
+    同时读取所有 seed 的 final_result_seed_{N}.json，聚合 best_fx / elapsed_time 的统计量，
     保存为 combined_final_results.json。
     """
-    # ── 1. 收集所有 run 的 progress 数据 ──────────────────────────────────────
+    # ── 1. 收集所有 seed 的 progress 数据 ──────────────────────────────────────
     all_runs_trajectories = []   # list of list of {step, best_fx, elapsed_time}
-    all_runs_final = []           # list of dicts from final_result.json
+    all_runs_final = []          # list of dicts from final_result_seed_{N}.json
 
-    for run_idx in range(n_runs):
-        run_dir = algo_dir / f"run_{run_idx}"
-        prog_file = run_dir / "progress.json"
-        final_file = run_dir / "final_result.json"
+    for seed in seeds:
+        prog_file = algo_dir / f"progress_seed_{seed}.json"
+        final_file = algo_dir / f"final_result_seed_{seed}.json"
 
         if prog_file.exists():
             with open(prog_file) as f:
@@ -195,7 +195,8 @@ def _combine_run_results(algo_dir: Path, n_runs: int,
     combined_prog = {
         'problem': problem_name,
         'algorithm': algorithm,
-        'n_runs': n_runs,
+        'n_runs': len(seeds),
+        'seeds': seeds,
         'results': combined_results,
     }
     with open(algo_dir / 'combined_progress.json', 'w') as f:
@@ -213,7 +214,8 @@ def _combine_run_results(algo_dir: Path, n_runs: int,
     agg = {
         'problem': problem_name,
         'algorithm': algorithm,
-        'n_runs': n_runs,
+        'n_runs': len(seeds),
+        'seeds': seeds,
     }
     if final_fx:
         fx_arr = np.array(final_fx, dtype=float)
@@ -234,25 +236,25 @@ def _combine_run_results(algo_dir: Path, n_runs: int,
 class BenchmarkResult:
 
     def __init__(self, result_dir: str, func_name: str, dims: int,
-                 algorithm: str, run_index: int = None):
+                 algorithm: str, actual_seed: int = None):
         """
         Args:
             result_dir: 结果根目录
             func_name: 函数名称
             dims: 问题维度
             algorithm: 算法名称
-            run_index: 本次运行的索引（用于多 run 模式，None 表示单次运行）
+            actual_seed: 本次运行的 seed（用于文件命名：progress_seed_{N}.json）
         """
         self.result_dir = Path(result_dir)
         self.func_name = func_name
         self.dims = dims
         self.algorithm = algorithm
-        self.run_index = run_index
+        self.actual_seed = actual_seed
 
-        # 多 run 模式下：result/{func}_{dims}d/{algorithm}/run_{i}/
-        # 单次运行：result/{func}_{dims}d/{algorithm}/
-        if run_index is not None:
-            self.algo_dir = self.result_dir / f"{func_name}_{dims}d" / algorithm / f"run_{run_index}"
+        # 多 run 模式：result/{func}_{dims}d/{algorithm}/progress_seed_{N}.json
+        # 单次运行：result/{func}_{dims}d/{algorithm}/progress.json
+        if actual_seed is not None:
+            self.algo_dir = self.result_dir / f"{func_name}_{dims}d" / algorithm
         else:
             self.algo_dir = self.result_dir / f"{func_name}_{dims}d" / algorithm
         self.algo_dir.mkdir(parents=True, exist_ok=True)
@@ -299,9 +301,9 @@ class BenchmarkResult:
         if not self.results:
             return
 
-        # 多 run 模式下保存为 progress_{run}.json，单次运行为 progress.json
-        if self.run_index is not None:
-            result_file = self.algo_dir / f"progress_{self.run_index}.json"
+        # 多 run 模式下保存为 progress_seed_{N}.json，单次运行为 progress.json
+        if self.actual_seed is not None:
+            result_file = self.algo_dir / f"progress_seed_{self.actual_seed}.json"
         else:
             result_file = self.algo_dir / "progress.json"
 
@@ -310,7 +312,7 @@ class BenchmarkResult:
                 'func_name': self.func_name,
                 'dims': self.dims,
                 'algorithm': self.algorithm,
-                'run_index': self.run_index,
+                'seed': self.actual_seed,
                 'results': self.results,
                 'total_results': len(self.results),
                 'last_step': self.results[-1]['step'] if self.results else 0,
@@ -320,8 +322,8 @@ class BenchmarkResult:
     def save_final(self, best_x: np.ndarray, best_fx: float, total_time: float,
                    total_evaluations: int = None):
         """保存最终结果"""
-        if self.run_index is not None:
-            final_file = self.algo_dir / f"final_result_{self.run_index}.json"
+        if self.actual_seed is not None:
+            final_file = self.algo_dir / f"final_result_seed_{self.actual_seed}.json"
         else:
             final_file = self.algo_dir / "final_result.json"
 
@@ -333,7 +335,7 @@ class BenchmarkResult:
                 'func_name': self.func_name,
                 'dims': self.dims,
                 'algorithm': self.algorithm,
-                'run_index': self.run_index,
+                'seed': self.actual_seed,
                 'best_x': best_x.tolist() if best_x is not None else None,
                 'best_fx': float(best_fx),
                 'total_time': float(total_time),
@@ -388,7 +390,6 @@ def run_single_algorithm(
     运行单个算法的基准测试
     """
     if seed is not None:
-        import random
         random.seed(seed)
         np.random.seed(seed)
         torch.manual_seed(seed)
@@ -552,14 +553,16 @@ def run_benchmark(
     single_algorithm: Optional[str] = None,
     use_continuous: bool = False,
     wandb_config: Optional[WandbConfig] = None,
-    seed: int = None,
-    run_times: int = 1,
+    seeds: List[int] = None,
     allow_occupied: bool = False,
 ):
     """运行完整的基准测试
 
     Args:
-        run_times: 重复运行次数（每次使用不同的 seed：0, 1, ..., run_times-1）
+        seeds: seed 列表，如 [14, 888, 92, 473, 546]。
+               每个 seed 独立跑一次，结果存为 progress_seed_{N}.json。
+               未传入时，随机生成 len(seeds) 个 seed（默认 5 个）。
+        allow_occupied: 是否允许使用有空闲显存但已被占用的 GPU。
     """
     device = None
 
@@ -569,9 +572,14 @@ def run_benchmark(
     if not functions:
         functions = list(TEST_FUNCTIONS.keys())
 
-    # 多 run 模式下，所有 run 使用相同的 problem×algorithm 配置
-    seeds = list(range(run_times)) if run_times > 1 else ([seed] if seed is not None else [None])
-    n_runs = run_times
+    # seeds 逻辑：
+    # - 传入 seeds > 0 → 每个 seed 独立跑一次
+    # - 未传入 / 传入 [] → 只跑一遍，随机生成 1 个 seed
+    if seeds is not None and len(seeds) > 0:
+        actual_seeds = seeds
+    else:
+        actual_seeds = [random.randint(0, 2**31 - 1)]
+    n_runs = len(actual_seeds)
 
     print(f"\n{'='*60}")
     print(f"BBO Benchmark Configuration")
@@ -583,7 +591,7 @@ def run_benchmark(
     print(f"Batch size: {batch_size}")
     print(f"GPU enabled: {use_gpu}")
     print(f"Result directory: {result_dir}")
-    print(f"Run times: {n_runs}  (seeds: {seeds})")
+    print(f"Run times: {n_runs}  (seeds: {actual_seeds})")
     print(f"{'='*60}\n")
 
     for algorithm in algorithms:
@@ -594,18 +602,16 @@ def run_benchmark(
         for func_name in functions:
             print(f"\n--- {func_name}({dims}d) ---")
 
-            # 多 run 模式：外层循环遍历每个 seed
-            for run_idx, actual_seed in enumerate(seeds):
-                run_label = f"run_{run_idx}" if n_runs > 1 else "run_0"
-                seed_str = str(actual_seed) if actual_seed is not None else "random"
-                print(f"  [{run_label}] seed={seed_str}")
+            # 每个 seed 独立跑一次
+            for actual_seed in actual_seeds:
+                print(f"  [seed={actual_seed}]")
 
                 result_manager = BenchmarkResult(
                     result_dir=result_dir,
                     func_name=func_name,
                     dims=dims,
                     algorithm=algorithm,
-                    run_index=run_idx if n_runs > 1 else None,
+                    actual_seed=actual_seed,
                 )
 
                 try:
@@ -626,7 +632,7 @@ def run_benchmark(
                     )
                 except Exception as e:
                     print(f"Error running {algorithm}/{func_name} "
-                          f"[{run_label}] seed={seed_str}: {e}")
+                          f"[seed={actual_seed}]: {e}")
                     import traceback
                     traceback.print_exc()
                     if _is_gpu_unavailable_error(e):
@@ -640,7 +646,7 @@ def run_benchmark(
             if n_runs > 1:
                 algo_dir = Path(result_dir) / f"{func_name}_{dims}d" / algorithm
                 problem_name = f"{func_name}_{dims}d"
-                _combine_run_results(algo_dir, n_runs, problem_name, algorithm)
+                _combine_run_results(algo_dir, actual_seeds, problem_name, algorithm)
                 print(f"  -> combined progress saved to {algo_dir}/combined_progress.json")
 
     print(f"\n{'='*60}")
@@ -749,11 +755,12 @@ def main():
                         help='Weights & Biases run group')
     parser.add_argument('--wandb-tags', nargs='+', default=[],
                         help='Weights & Biases tags')
-    parser.add_argument('--seed', type=int, default=None,
-                        help='Random seed for single run (ignored when --run-times > 1)')
-    parser.add_argument('--run-times', type=int, default=1,
-                        help='Number of repeated runs (default: 1). '
-                             'Each run uses a different seed 0..N-1.')
+    parser.add_argument('--seed', type=int, nargs='+', default=None,
+                        help='Space-separated seeds, e.g. "14 888 92 473 546". '
+                             'Each seed runs independently. '
+                             'If not provided, seeds are randomly generated.')
+    parser.add_argument('--run-times', type=int, default=5,
+                        help='[Deprecated] Number of runs is now determined by --seed count or default 5.')
 
     args = parser.parse_args()
 
@@ -765,6 +772,8 @@ def main():
             group=args.wandb_group,
             tags=args.wandb_tags,
         )
+
+    seeds = args.seed
 
     results = run_benchmark(
         algorithms=args.algorithms,
@@ -778,8 +787,7 @@ def main():
         single_algorithm=args.single,
         use_continuous=args.continuous,
         wandb_config=wandb_config,
-        seed=args.seed,
-        run_times=args.run_times,
+        seeds=seeds,
         allow_occupied=args.use_GPU_occupied,
     )
 

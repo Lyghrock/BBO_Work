@@ -7,7 +7,8 @@
 # - GPU 由 baselines + utils/gpu_scheduler 自动分配
 # - Lasso 默认仅真实任务（dna, rcv1）
 # - Mopta08 通过 --mopta 或 --all 启用
-# - 支持 --run-times K 多次运行（seeds: 0..K-1）
+# - 支持 --seed N1 N2 N3 ... 空格分隔的 seed 列表，每个独立跑一次
+# - 未指定 --seed 时自动生成 5 个随机 seed
 # ============================================================
 
 set -u
@@ -34,9 +35,10 @@ WANDB_PROJECT="bbo"
 WANDB_ENTITY="hongweijun_jack-peking-university"
 WANDB_BASE_GROUP="bbo-main"
 WANDB_RUN_TAG="run-$(date +%Y%m%d-%H%M%S)"
-SEED=""
-RUN_TIMES=1
 USE_GPU_OCCUPIED=false
+
+# seed: 初始化为空字符串，set -u 下不会报错
+SEED_STR=""
 
 usage() {
   echo "Usage: $0 [OPTIONS]"
@@ -58,14 +60,15 @@ usage() {
   echo "  --wandb-base-group NAME  统一显示分组前缀（默认: bbo-main）"
     echo "  --wandb-run-tag TAG      本次批次标签（默认: run-时间戳）"
     echo "  --no-wandb               禁用 wandb 记录（加快调试速度）"
-    echo "  --seed N                 随机种子（不指定则随机）"
-    echo "  --run-times K             重复运行 K 次，每次用不同的 seed（默认 1）"
+    echo "  --seed N [N2 N3 ...]   空格分隔的随机种子"
+    echo "                           示例: --seed 14 888 92 473 546"
+    echo "                           未指定时：自动生成 5 个随机 seed"
     echo "  --use-GPU-occupied       允许使用已有其他进程占用但显存有空闲的 GPU（默认关闭）"
     echo ""
   echo "Examples:"
-  echo "  $0 --cec --algo bo turbo --func ackley rastrigin"
-  echo "  $0 --mujoco --env hopper ant --algo scalpel baxus"
-  echo "  $0 --mopta --algo turbo cmaes"
+  echo "  $0 --cec --algo bo turbo --func ackley rastrigin --seed 42 43 44 45 46"
+  echo "  $0 --mujoco --env hopper ant --algo scalpel baxus --seed 0 100 200"
+  echo "  $0 --all --seed 14 888 92 473 546   # 自动 5 次 run"
 }
 
 # --- Parse args ---
@@ -136,11 +139,24 @@ while [[ $# -gt 0 ]]; do
       shift
       ;;
     --seed)
-      SEED="$2"
-      shift 2
+      # 收集所有后续非标志参数作为 seed
+      shift
+      SEEDS=()
+      while [[ $# -gt 0 && "$1" != --* ]]; do
+        SEEDS+=("$1")
+        shift
+      done
+      # 如果没收集到（下一个是 -- 开头的或空了），报错
+      if [[ ${#SEEDS[@]} -eq 0 ]]; then
+        echo "ERROR: --seed requires at least one integer argument"
+        echo "       示例: --seed 14 888 92 473 546"
+        exit 1
+      fi
+      SEED_STR="${SEEDS[*]}"
       ;;
     --run-times)
-      RUN_TIMES="$2"
+      echo "WARNING: --run-times is deprecated. Run times is now determined by --seed count (default: 5 random seeds)."
+      echo "         Use --seed to explicitly specify seeds, or omit both to auto-generate 5 random seeds."
       shift 2
       ;;
     --use-GPU-occupied)
@@ -202,6 +218,19 @@ mkdir -p lasso_bench/results
 mkdir -p mopta/results
 mkdir -p output
 
+# seed 逻辑：传了 seed → 使用这些 seed；没传 → 自动生成 1 个随机 seed
+if [[ -n "$SEED_STR" ]]; then
+  read -ra _tmp_seeds <<< "$SEED_STR"
+  ACTUAL_RUN_TIMES=${#_tmp_seeds[@]}
+  ACTUAL_SEEDS=("${_tmp_seeds[@]}")
+else
+  # 未指定 seed：生成 1 个随机 seed
+  ACTUAL_RUN_TIMES=1
+  _rand_seed=$(python3 -c "import random; print(random.randint(0, 2147483647))")
+  ACTUAL_SEEDS=("$_rand_seed")
+  SEED_STR="$_rand_seed"
+fi
+
 echo ""
 echo "=================================================="
 echo "BBO Benchmark - Configuration"
@@ -211,7 +240,8 @@ echo "Algorithms: ${SELECTED_ALGOS[*]}"
 [[ "$RUN_MUJOCO" == true ]] && echo "MuJoCo envs: ${MUJOCO_LIST[*]}"
 [[ "$RUN_LASSO" == true ]] && echo "Lasso tasks: ${LASSO_LIST[*]}"
 [[ "$RUN_MOPTA" == true ]] && echo "Mopta: mopta08"
-echo "Run times: ${RUN_TIMES}"
+echo "Run times: ${ACTUAL_RUN_TIMES}"
+echo "Seeds: ${SEED_STR}"
 echo "Wandb: project=${WANDB_PROJECT}, base_group=${WANDB_BASE_GROUP}"
 echo "Wandb run tag: ${WANDB_RUN_TAG}"
 echo "=================================================="
@@ -237,8 +267,7 @@ for ALG in "${SELECTED_ALGOS[@]}"; do
     WANDB_ENTITY="'"$WANDB_ENTITY"'"
     WANDB_BASE_GROUP="'"$WANDB_BASE_GROUP"'"
     WANDB_RUN_TAG="'"$WANDB_RUN_TAG"'"
-    SEED="'"$SEED"'"
-    RUN_TIMES="'"$RUN_TIMES"'"
+    SEED_STR="'"$SEED_STR"'"
     USE_GPU_OCCUPIED="'"$USE_GPU_OCCUPIED"'"
 
     FUNC_LIST_STR="'"${FUNC_LIST[*]}"'"
@@ -265,16 +294,11 @@ for ALG in "${SELECTED_ALGOS[@]}"; do
       WANDB_BASE_ARGS=""
     fi
 
-    if [[ -n "$SEED" && "$RUN_TIMES" == "1" ]]; then
-      SEED_ARGS="--seed ${SEED}"
+    # seed: 空格分隔的字符串，直接传给 Python 脚本（内部解析）
+    if [[ -n "$SEED_STR" ]]; then
+      SEED_ARGS="--seed ${SEED_STR}"
     else
       SEED_ARGS=""
-    fi
-
-    if [[ -n "$RUN_TIMES" && "$RUN_TIMES" != "1" ]]; then
-      RUN_TIMES_ARGS="--run-times ${RUN_TIMES}"
-    else
-      RUN_TIMES_ARGS=""
     fi
 
     if [[ "$USE_GPU_OCCUPIED" == true ]]; then
@@ -316,7 +340,7 @@ for ALG in "${SELECTED_ALGOS[@]}"; do
             --dims "$D" --budget "$BUDGET" --batch 1 \
             --algorithms "$ALG" --functions "$FUNC" \
             --result-dir cec_functions/results \
-            $WANDB_ARGS $SEED_ARGS $RUN_TIMES_ARGS $USE_GPU_ARGS \
+            $WANDB_ARGS $SEED_ARGS $USE_GPU_ARGS \
             > "$OUT_DIR/cec_${FUNC}_${D}d.out" 2>&1
         done
       done
@@ -335,7 +359,7 @@ for ALG in "${SELECTED_ALGOS[@]}"; do
           --budget "$BUDGET" --batch 1 \
           --result-dir mujoco/results \
           --no-per-env-budget \
-          $WANDB_ARGS $SEED_ARGS $RUN_TIMES_ARGS $USE_GPU_ARGS \
+          $WANDB_ARGS $SEED_ARGS $USE_GPU_ARGS \
           > "$OUT_DIR/mujoco_${ENV_NAME}.out" 2>&1
       done
     fi
@@ -349,7 +373,7 @@ for ALG in "${SELECTED_ALGOS[@]}"; do
           --algorithms "$ALG" --benchmarks "$BENCH" \
           --budget 1000 --batch 1 \
           --result-dir lasso_bench/results \
-          $WANDB_ARGS $SEED_ARGS $RUN_TIMES_ARGS $USE_GPU_ARGS \
+          $WANDB_ARGS $SEED_ARGS $USE_GPU_ARGS \
           > "$OUT_DIR/lasso_${BENCH}.out" 2>&1
       done
     fi
@@ -358,12 +382,12 @@ for ALG in "${SELECTED_ALGOS[@]}"; do
       log "Running Mopta08 for ${ALG}"
       WANDB_GROUP="${WANDB_BASE_GROUP}/mopta/mopta08"
       WANDB_ARGS="${WANDB_BASE_ARGS} --wandb-group ${WANDB_GROUP} --wandb-tags ${ALG} mopta mopta08 ${WANDB_RUN_TAG}"
-      python run_bbo_mopta.py \
-        --algorithms "$ALG" \
-        --budget 1000 --batch 1 \
-        --result-dir mopta/results \
-        $WANDB_ARGS $SEED_ARGS $RUN_TIMES_ARGS $USE_GPU_ARGS \
-        > "$OUT_DIR/mopta08.out" 2>&1
+        python run_bbo_mopta.py \
+          --algorithms "$ALG" \
+          --budget 1000 --batch 1 \
+          --result-dir mopta/results \
+          $WANDB_ARGS $SEED_ARGS $USE_GPU_ARGS \
+          > "$OUT_DIR/mopta08.out" 2>&1
     fi
 
     log "${ALG} done"

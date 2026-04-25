@@ -99,7 +99,7 @@ class GPUScheduler:
 
         Args:
             min_memory_mb: 最小可用内存（MB）
-            allow_occupied: False（默认）：只选完全空闲（memory_used == 0）的 GPU；
+            allow_occupied: False（默认）：只选几乎完全空闲（memory_used <= 100MB）的 GPU；
                             True：允许选择任意有足够空闲显存的 GPU。
 
         Returns:
@@ -111,9 +111,10 @@ class GPUScheduler:
             if allow_occupied:
                 available = [g for g in gpu_info if g['memory_free'] >= min_memory_mb]
             else:
+                # 只选几乎完全空闲的 GPU（memory_used <= 100MB，考虑驱动占用）
                 available = [
                     g for g in gpu_info
-                    if g['memory_used'] == 0 and g['memory_free'] >= min_memory_mb
+                    if g['memory_used'] <= 100 and g['memory_free'] >= min_memory_mb
                 ]
 
             if available:
@@ -136,7 +137,7 @@ class GPUScheduler:
             min_memory_mb: 最小可用内存（MB）
             allow_reuse_reserved: 是否允许复用同一进程内其他 job_key 保留的 GPU
             allow_occupied: 是否允许选择已有其他进程占用（但显存有空闲）的 GPU。
-                            False（默认）：只选完全空闲（memory_used == 0）的 GPU，
+                            False（默认）：只选几乎完全空闲（memory_used <= 100MB）的 GPU，
                                          找不到直接返回 None；
                             True：允许选择任意有足够空闲显存的 GPU（包括已有进程的）。
 
@@ -169,12 +170,13 @@ class GPUScheduler:
 
                 used_by_others = {int(v["gpu"]) for k, v in reservations.items() if k != job_key}
 
-                # 默认模式：只选完全空闲的 GPU（memory_used == 0）
+                # 默认模式：只选几乎完全空闲的 GPU（memory_used <= 100MB，考虑驱动占用）
+                # 不要用 memory_used == 0，因为大多数系统驱动本身会占用 1~50MB
                 candidates = [
                     g for g in gpu_info
                     if g["memory_free"] >= min_memory_mb
                     and g["index"] not in used_by_others
-                    and g["memory_used"] == 0
+                    and g["memory_used"] <= 100
                 ]
 
                 # allow_occupied=True 时，允许选择已有其他进程占用的 GPU
