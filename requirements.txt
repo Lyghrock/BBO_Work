@@ -1,0 +1,32 @@
+# BBO Workbench - Python Dependencies
+# Install with: pip install -r requirements.txt
+
+# ⚠️ PyTorch (CUDA 12.8) - MUST be installed BEFORE other packages
+# Using PyTorch stable with CUDA 12.8 support (v2.7.0+)
+pip install torch torchvision torchaudio \
+    --index-url https://download.pytorch.org/whl/cu128
+
+# Core scientific computing
+numpy>=1.24.0
+scipy>=1.10.0
+scikit-learn>=1.3.0          # sklearn
+
+# Bayesian optimization
+gpytorch>=1.10.0
+botorch>=0.8.0               # SAASBO, BAxUS
+
+# Evolution & meta-learning
+cma>=3.2.0                   # CMA-ES (Nikolaus Hansen)
+nevergrad>=0.6.0
+
+# Reinforcement learning environments
+gymnasium>=0.28.0            # formerly 'gym'
+
+# Utilities
+tqdm>=4.65.0
+joblib>=1.3.0
+matplotlib>=3.7.0
+wandb>=0.15.0                # Weights & Biases logging
+
+# Optional: Scalpel (install separately if needed)
+# pip install scalpel

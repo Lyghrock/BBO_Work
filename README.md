@@ -16,56 +16,85 @@
 
 ---
 
-## 一、文件结构与核心脚本
+## 一、安装
 
-### 1.1 整体目录树
+### 1.1 环境准备
+
+```bash
+# 创建并激活 conda 环境
+conda create -n BBO_Task python=3.10 -y
+conda activate BBO_Task
+
+# 安装 PyTorch（CUDA 12.8 版本，请根据你自己的 CUDA 版本选择对应的 wheel）
+# 你的服务器使用 CUDA 12.8，用以下命令安装：
+pip install torch torchvision torchaudio \
+    --index-url https://download.pytorch.org/whl/cu128
+
+# 安装其余依赖
+pip install -r requirements.txt
+```
+
+> **如何确认自己的 CUDA 版本？** 运行 `nvidia-smi` 或 `nvcc --version`，查看右上角的 Driver Version / CUDA Version。
+>
+> 可选 CUDA wheel 版本：
+> - CUDA 12.6: `--index-url https://download.pytorch.org/whl/cu126`
+> - CUDA 11.8: `--index-url https://download.pytorch.org/whl/cu118`
+> - CPU only: `--index-url https://download.pytorch.org/whl/cpu`
+>
+> **PyTorch 版本说明**：`requirements.txt` 中的 `torch>=2.0.0` 仅作为占位，实际通过上面的 `pip install torch ...` 命令安装 CUDA 版本。
+
+### 1.2 额外依赖
+
+- **MuJoCo**：需要提前安装 MuJoCo物理引擎 及 `mujoco-py` 或 `gymnasium` 的 MuJoCo 依赖项。
+- **Scalpel**（可选）：`pip install scalpel`。不安装则 Scalpel 算法不可用，其余算法不受影响。
+- **Mopta08**（可选）：需要提供 Mopta08 二进制可执行文件，并通过 `--mopta-executable` 指定路径。
+
+### 1.3 GPU 说明
+
+本项目的 GPU 调度**不依赖任何写死的 GPU ID**，在不同服务器上均可自动运行：
+
+- 调度器通过 `nvidia-smi` 查询所有可见 GPU 的内存使用情况
+- 自动选择空闲 GPU（或在开启 `--use-GPU-occupied` 时选择有空闲显存的已占用 GPU）
+- 支持跨服务器：只要目标机器有 NVIDIA GPU 并安装了 `torch`，脚本可直接运行
+- 详见 [四、辅助功能 → GPU 调度](#四辅助功能实现)
+
+---
+
+## 二、文件结构与核心脚本
+
+### 2.1 整体目录树
 
 ```
 BBO_Work/
 ├── baselines/                     # 所有BBO算法的统一封装接口
 │   ├── __init__.py               # 统一导出 + 工厂函数 create_optimizer()
-│   ├── base.py                    # 基类 BaseOptimizer 和 StatsFuncWrapper
-│   ├── bo.py                     # 贝叶斯优化 (GPyTorch, GPU加速)
-│   ├── turbo.py                  # TuRBO信任域优化
-│   ├── cmaes.py                  # CMA-ES进化算法
-│   ├── nevergrad.py              # NeverGrad元算法集成
-│   ├── lamcts_opt.py             # LaMCTS树搜索优化器
-│   ├── hesbo.py                  # HeSBO高维嵌入子空间优化
-│   ├── baxus.py                  # BAxUS自适应扩展子空间优化
-│   ├── saasbo.py                 # SAASBO稀疏轴对齐子空间优化
-│   └── lamcts/                   # LaMCTS核心模块
-│       ├── MCTS.py               # MCTS树核心
-│       ├── Node.py               # 树节点��义
-│       ├── Classifier.py         # SVM代理分类器
-│       └── utils.py              # 拉丁超立方采样等工具
-├── scalpel/                       # Scalpel算法实现
-│   ├── scalpel_opt.py            # BaseOptimizer包装器
-│   ├── scalpel_core.py           # 核心MCTS rollout逻辑
-│   └── original/                 # 原始参考实现
-├── functions/                     # 测试函数与环境包装
-│   ├── test_functions.py         # 7个经典CEC测试函数
-│   ├── mujoco_functions.py        # MuJoCo强化学习环境封装
-│   ├── lasso_wrapper.py           # LassoBench任务包装（DNA/RCV1）
-│   ├── mopta08_wrapper.py         # Mopta08二进制评估包装
-│   └── visualize_policy.py        # 策略可视化
-├── nas_bench/                     # 🚧 待完成 - NAS搜索空间基准
-│   └── ...                        # 神经网络架构搜索任务集
-├── lasso_bench/                    # Lasso任务结果目录
-│   └── results/
-├── mopta/                         # Mopta08结果目录
-│   └── results/
-├── utils/                         # 辅助工具
-│   ├── gpu_scheduler.py           # GPU调度器（多任务自动分配）
-│   ├── benchmark_plotter.py       # 结果绘图
-│   └── render_mujoco.py           # MuJoCo动画渲染
-├── run_bbo.sh                     # 主启动脚本（shell编排）
-├── run_bbo_benchmark.py           # CEC测试函数benchmark入口
-├── run_bbo_mujoco.py              # MuJoCo环境benchmark入口
-├── run_bbo_lasso.py               # Lasso-Bench benchmark入口（DNA/RCV1）
-└── run_bbo_mopta.py               # Mopta08 benchmark入口
+│   ├── base.py                   # 基类 BaseOptimizer 和 StatsFuncWrapper / resolve_device()
+│   ├── bo.py                    # 贝叶斯优化 (GPyTorch, GPU加速)
+│   ├── turbo.py                 # TuRBO信任域优化
+│   ├── cmaes.py                 # CMA-ES进化算法
+│   ├── hesbo.py                 # HeSBO高维嵌入子空间优化
+│   ├── baxus.py                 # BAxUS自适应扩展子空间优化
+│   └── saasbo.py                # SAASBO稀疏轴对齐子空间优化
+├── scalpel/                      # Scalpel算法实现（可选安装）
+├── functions/                    # 测试函数与环境包装
+│   ├── test_functions.py        # 7个经典CEC测试函数
+│   ├── mujoco_functions.py      # MuJoCo强化学习环境封装
+│   ├── lasso_wrapper.py         # LassoBench任务包装（DNA/RCV1）
+│   └── mopta08_wrapper.py       # Mopta08二进制评估包装
+├── utils/                        # 辅助工具
+│   ├── gpu_scheduler.py         # GPU调度器（多任务自动分配，支持 --use-GPU-occupied）
+│   ├── wandb_sync.py            # WandB 日志同步
+│   └── render_mujoco.py         # MuJoCo动画渲染
+├── run_bbo.sh                   # 主启动脚本（shell编排）
+├── run_bbo_benchmark.py         # CEC测试函数benchmark入口
+├── run_bbo_mujoco.py            # MuJoCo环境benchmark入口
+├── run_bbo_lasso.py             # Lasso-Bench benchmark入口（DNA/RCV1）
+├── run_bbo_mopta.py             # Mopta08 benchmark入口
+├── requirements.txt             # Python依赖清单
+└── README.md                    # 本文件
 ```
 
-### 1.2 核心脚本职责
+### 2.2 核心脚本职责
 
 | 脚本 | 职责 |
 |------|------|
@@ -75,7 +104,7 @@ BBO_Work/
 | `run_bbo_lasso.py` | Lasso-Bench主入口：默认真实任务 DNA/RCV1，支持统一算法评测与汇总 |
 | `run_bbo_mopta.py` | Mopta08主入口：对约束违反加入罚项，输出 penalized objective 与约束指标 |
 | `baselines/__init__.py` | **统一工厂函数** `create_optimizer(name, func_wrapper, **kwargs)`，隐藏所有算法细节 |
-| `utils/gpu_scheduler.py` | 基于`nvidia-smi`的GPU内存调度，自动分配空闲GPU给等待任务 |
+| `utils/gpu_scheduler.py` | 基于`nvidia-smi`的GPU内存调度，自动分配空闲GPU，支持 `--use-GPU-occupied` 灵活选卡 |
 
 ---
 
@@ -83,19 +112,17 @@ BBO_Work/
 
 ### 2.1 支持的算法列表
 
-项目统一封装了 **9个BBO算法**，均实现 `BaseOptimizer` 接口：
+项目统一封装了 **7个BBO算法**，均实现 `BaseOptimizer` 接口：
 
 | 算法 | 文件 | 核心原理 | GPU加速 | 特点 |
 |------|------|---------|---------|------|
 | **BO** | `bo.py` | 贝叶斯优化 + GPyTorch GP代理模型 + EI采集函数 | ✅ GPyTorch ExactGP | 数值稳定：保守配置重训 + 回退上次成功模型 |
 | **TuRBO** | `turbo.py` | Trust Region Bayesian Optimization（多TR并行） | ✅ GPyTorch | 动态TR大小：成功扩展/失败收缩，支持restart |
 | **CMA-ES** | `cmaes.py` | 协方差矩阵自适应进化策略（pycma实现） | ❌ | IPOP重启策略（popsize翻倍）+ Active CMA加速 |
-| **NeverGrad** | `nevergrad.py` | Meta-learner集成（NGOpt等） | ❌ | ask/tell接口，自动选择最优参数化 |
 | **HeSBO** | `hesbo.py` | 高维嵌入子空间贝叶斯优化（随机哈希投影到低维） | ✅ GPyTorch | 固定box_size=1，ARD核，适用于D≥100的极高维问题 |
 | **BAxUS** | `baxus.py` | 自适应扩展子空间贝叶斯优化（嵌套子空间TR） | ✅ BoTorch | pip install baxus，自适应扩展低维空间，高维问题专用 |
 | **SAASBO** | `saasbo.py` | 稀疏轴对齐子空间贝叶斯优化（SAAS先验+HMC推断） | ✅ BoTorch | 使用层次化稀疏先验自动识别重要维度，适合D~100-500 |
-| **LaMCTS** | `lamcts_opt.py` | MCTS树搜索 + SVM代理 + BO/TuRBO叶节点采样 | ✅ 可选 | **核心创新**：动态构建树 + 自适应Cp + GPU加速SVM |
-| **Scalpel** | `scalpel_opt.py` | MCTS rollout + GP回归替代函数 | ✅ | 与LaMCTS同源但用GP替代SVM，每轮约20个候选点 |
+| **Scalpel** | `scalpel_opt.py` | MCTS rollout + GP回归替代函数 | ✅ | 每轮约20个候选点，适合中高维问题 |
 
 ### 2.2 HeSBO 特殊说明
 
@@ -186,15 +213,19 @@ from baselines import create_optimizer
 
 # 一个函数创建所有算法
 optimizer = create_optimizer(
-    name='bo',           # 'bo' | 'turbo' | 'cmaes' | 'nevergrad' | 'hesbo' | 'baxus' | 'saasbo' | 'lamcts' | 'scalpel'
+    name='bo',           # 'bo' | 'turbo' | 'cmaes' | 'hesbo' | 'baxus' | 'saasbo' | 'scalpel'
     func_wrapper=wrapper,
-    gpu_id=0,
     batch_size=10,
-    device=torch.device('cuda:0'),
+    use_gpu=True,        # 是否启用GPU（默认True）
+    allow_occupied=False, # False：只选完全空闲GPU；True：允许选有空闲显存但已被占用的GPU
+    min_gpu_memory_mb=3000,  # 最小空闲显存（MB）
+    # GPU调度器会自动寻找可用GPU，无需写死GPU ID
 )
 x = optimizer.suggest(10)     # 建议10个点（外部评估）
 optimizer.observe(x, fx)      # 反馈结果
 ```
+
+> **跨服务器兼容性**：GPU 调度完全基于 `nvidia-smi` 的实时内存查询，不依赖任何写死的 GPU ID。在任何有 NVIDIA GPU 的服务器上均可自动运行。
 
 **函数包装器统一接口**（`FuncWrapper`）：
 
@@ -369,39 +400,52 @@ nohup sh -c "
 - **任务链**：`20D → 50D → 100D` 顺序执行，共享同一GPU
 - **stdout/stderr重定向**：`.out` 文件捕获输出日志，`.txt` 文件捕获主日志
 
-### 4.3 GPU加速逻辑
+### 4.3 GPU 调度与跨服务器兼容性
 
-**三层GPU管理架构**：
+本项目的 GPU 调度**不依赖任何写死的 GPU ID**，在不同服务器上均可自动运行。
 
-1. **GPU调度器** (`utils/gpu_scheduler.py`)
-   - 通过 `nvidia-smi --query-gpu` 查询所有GPU的内存使用情况
-   - `wait_for_gpu(min_memory_mb)` 轮询等待，直到有足够空闲内存的GPU可用
-   - 按空闲内存排序，选择最空闲的GPU
-   - 支持超时控制和检查间隔配置
+**三层 GPU 管理架构**：
 
-2. **算法层GPU配置**
-   - 每个算法接收 `gpu_id` 和 `device` 参数，在构造时调用 `torch.cuda.set_device()`
-   - **BO/TuRBO**：GPyTorch ExactGP在GPU上训练和预测
-   - **LaMCTS**：SVM分类器可选GPU加速
-   - **Scalpel**：内部使用GPU张量运算
-   - 所有算法实现**保险措施**：先 `set_device` 再构造任何GPU对象
+1. **GPU 调度器** (`utils/gpu_scheduler.py`)
+   - 通过 `nvidia-smi --query-gpu` 查询所有 GPU 的内存使用情况
+   - `acquire_gpu()` 按空闲显存排序，选择最空闲的 GPU
+   - `allow_occupied=True` 时允许选择已有其他进程占用但显存有空闲的 GPU
+   - `wait_for_gpu()` 轮询等待，支持超时控制和检查间隔配置
+   - 所有调度状态通过文件锁 + JSON 持久化，支持多进程安全共享
+
+2. **算法层 GPU 配置**
+   - `baselines/base.py` 中的 `resolve_device()` 是统一入口
+   - `baselines/__init__.py` 中的 `create_optimizer()` 工厂函数自动调用 `resolve_device()`
+   - **优先级**：显式 `device` > 显式 `gpu_id` > 自动调度 > CPU 回退
+   - 所有算法在构造时调用 `torch.cuda.set_device()`
 
 3. **内存清理**
    - 每10次函数评估调用一次 `torch.cuda.empty_cache()`
-   - 使用 `gc.collect()` 配合清理
-   - GPyTorch预测失败时尝试递增的 `jitter` 值（1e-4 → 1e-3 → 1e-2 → 1e-1）
+   - GPyTorch 预测失败时尝试递增的 `jitter` 值（1e-4 → 1e-3 → 1e-2 → 1e-1）
+
+**`--use-GPU-occupied` 选项**：
+
+| 模式 | 行为 |
+|------|------|
+| 默认（不加 `--use-GPU-occupied`） | 只选 `memory_used == 0` 的完全空闲 GPU；找不到直接退出 |
+| 开启 `--use-GPU-occupied` | 允许选择已有其他进程占用但 `memory_free >= min_memory_mb` 的 GPU |
+
+> 所有 runner 脚本均支持 `--use-GPU-occupied`（`run_bbo.sh` 也支持），可灵活应对服务器上 GPU 被部分占用的场景。
 
 **使用示例**：
 
 ```bash
-# 自动选择GPU（���存≥8GB）
-python run_bbo_benchmark.py --gpu-auto ...
+# 自动选完全空闲GPU（找不到直接退出）
+python run_bbo_benchmark.py --dims 50 --budget 5000 ...
 
-# 指定GPU 3
-python run_bbo_benchmark.py --gpu-id 3 ...
+# 自动选有空闲显存的GPU（即使被别的进程占用）
+python run_bbo_benchmark.py --dims 50 --budget 5000 --use-GPU-occupied ...
 
-# 无GPU模式
-python run_bbo_benchmark.py --no-gpu ...
+# 在 run_bbo.sh 中开启
+bash run_bbo.sh --cec --use-GPU-occupied
+
+# 完全禁用GPU（使用CPU）
+python run_bbo_benchmark.py --dims 50 --no-gpu ...
 ```
 
 ---
@@ -411,11 +455,15 @@ python run_bbo_benchmark.py --no-gpu ...
 ```
 Shell (run_bbo.sh)
     └─ nohup + sh -c 链式任务
-           ├─ GPU调度器 → 分配合适GPU
+           ├─ GPU调度器 (allow_occupied=False/True)
+           │    ├─ nvidia-smi 查询所有GPU内存
+           │    ├─ False（默认）：只选 memory_used == 0 的完全空闲GPU
+           │    └─ True：允许选有空闲显存但已被占用的GPU
            ├─ create_optimizer() → 工厂函数
-           │      └─ 算法类 (BO/TuRBO/CMAES/NG/LaMCTS/Scalpel)
-           │             └─ func_wrapper (FuncWrapper)
-           │                    └─ 测试函数 / MuJoCo环境
+           │    └─ resolve_device() → 统一设备解析
+           │           └─ 算法类 (BO/TuRBO/CMAES/HeSBO/BAxUS/SAASBO/Scalpel)
+           │                  └─ func_wrapper (FuncWrapper)
+           │                         └─ 测试函数 / MuJoCo环境 / Lasso-Bench / Mopta08
            ├─ BenchmarkResult → 周期性 save progress.json
            └─ 完成后 save final_result.json + 更新 summary.json
 ```
@@ -424,35 +472,81 @@ Shell (run_bbo.sh)
 
 ## 六、快速开始
 
-### 6.1 CEC函数Benchmark
+### 6.1 run_bbo.sh 主入口（推荐）
 
 ```bash
-# 完整评测（后台挂起）
+# 激活环境
+conda activate BBO_Task
+
+# 完整评测（后台挂起，自动选空闲GPU）
 bash run_bbo.sh
 
-# 单函数单算法测试
-python run_bbo_benchmark.py \
-    --functions ackley rastrigin \
-    --algorithms bo lamcts scalpel \
-    --dims 50 \
-    --budget 5000 \
-    --batch 10 \
-    --gpu-id 0
+# 只跑 CEC，默认所有算法
+bash run_bbo.sh --cec
+
+# 只跑 MuJoCo，只测 hopper 和 ant
+bash run_bbo.sh --mujoco --env hopper ant
+
+# 只跑 Lasso，只测 bo 和 turbo
+bash run_bbo.sh --lasso --algo bo turbo
+
+# 多次运行（seeds: 0, 1, ..., K-1）
+bash run_bbo.sh --cec --run-times 5
+
+# 允许使用有空闲显存但已被占用的GPU（服务器GPU部分占用时使用）
+bash run_bbo.sh --cec --use-GPU-occupied
+
+# 关闭 wandb 日志（加快调试速度）
+bash run_bbo.sh --cec --no-wandb
+
+# 完整示例：跑 MuJoCo hopper + ant，多算法，多 run，关闭 wandb
+bash run_bbo.sh --mujoco --env hopper ant --algo bo turbo cmaes --run-times 3 --no-wandb
 ```
 
-### 6.2 MuJoCo Benchmark
+### 6.2 CEC函数Benchmark（独立脚本）
 
 ```bash
-# 完整评测
-python run_bbo_mujoco.py \
-    --algorithms bo turbo cmaes lamcts scalpel \
-    --environments swimmer hopper ant \
-    --budget 3000 \
-    --gpu-id 1 \
-    --plot
+# 单函数单算法测试（自动选GPU）
+python run_bbo_benchmark.py \
+    --functions ackley rastrigin \
+    --algorithms bo turbo cmaes \
+    --dims 50 \
+    --budget 5000 \
+    --batch 10
+
+# 指定算法子集
+python run_bbo_benchmark.py \
+    --algorithms bo scalpel \
+    --functions ackley \
+    --dims 100 --budget 12000
+
+# 允许占用已有进程的GPU
+python run_bbo_benchmark.py --functions ackley --algorithms bo --use-GPU-occupied
+
+# 多 run 模式
+python run_bbo_benchmark.py --functions ackley --algorithms bo --run-times 5
+
+# 关闭 wandb 加速调试
+python run_bbo_benchmark.py --functions ackley --algorithms bo --no-wandb
 ```
 
-### 6.3 Lasso-Bench Benchmark
+### 6.3 MuJoCo Benchmark
+
+```bash
+python run_bbo_mujoco.py \
+    --algorithms bo turbo cmaes scalpel \
+    --environments swimmer hopper ant \
+    --budget 3000 \
+    --plot
+
+# 允许使用已有进程占用的GPU
+python run_bbo_mujoco.py --environments hopper --algorithms bo --use-GPU-occupied
+
+# 多 run
+python run_bbo_mujoco.py --environments hopper --algorithms bo --run-times 3
+```
+
+### 6.4 Lasso-Bench Benchmark
 
 ```bash
 # 默认真实任务（DNA + RCV1）
@@ -460,9 +554,12 @@ python run_bbo_lasso.py \
     --algorithms bo turbo cmaes hesbo baxus saasbo scalpel \
     --benchmarks dna rcv1 \
     --batch 1
+
+# 允许使用有空闲显存的已占用GPU
+python run_bbo_lasso.py --benchmarks dna --algorithms bo --use-GPU-occupied
 ```
 
-### 6.4 Mopta08 Benchmark
+### 6.5 Mopta08 Benchmark
 
 ```bash
 # 运行前需要提供 Mopta08 可执行文件路径
@@ -472,7 +569,7 @@ python run_bbo_mopta.py \
     --mopta-executable /path/to/mopta08_elf64.bin
 ```
 
-### 6.5 结果查看
+### 6.6 结果查看
 
 ```bash
 # 查看汇总结果
@@ -484,5 +581,5 @@ cat mopta/results/summary.json
 python run_bbo_benchmark.py --plot
 
 # 查看GPU状态
-python utils/gpu_scheduler.py
+python -c "from utils.gpu_scheduler import get_gpu_scheduler; get_gpu_scheduler().print_status()"
 ```
