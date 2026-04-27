@@ -34,7 +34,6 @@ declare -a TASK_ID_ALGO=(
     "3:scalpel"
     "4:hesbo"
     "5:baxus"
-    "6:saasbo"
 )
 
 #---------------- parse arguments into seed vs benchmark groups ----------------

@@ -16,15 +16,16 @@
 #===========================================================
 
 #---------------- SBATCH directives ----------------
-#SBATCH --job-name=bbo_1gpu
+#SBATCH --job-name=bbo_single_algo
 #SBATCH --partition=h100
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --gres=gpu:1
-#SBATCH --cpus-per-task=8
+#SBATCH --cpus-per-task=16
 #SBATCH --time=168:00:00
-#SBATCH --output=%x_%j.out
-#SBATCH --error=%x_%j.err
+#SBATCH --chdir=/home/weijun/assigned_runs
+#SBATCH --output=slurm_logs/%x_%j.out
+#SBATCH --error=slurm_logs/%x_%j.err
 
 set -e
 
@@ -36,7 +37,6 @@ declare -a ALGOS=(
     "scalpel"
     "hesbo"
     "baxus"
-    "saasbo"
 )
 
 #---------------- default benchmark selection ----------------
@@ -156,7 +156,9 @@ if [[ "$RUN_CEC" == false && "$RUN_MUJOCO" == false && "$RUN_LASSO" == false && 
 fi
 
 #---------------- working directory ----------------
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# NOTE: In SLURM, job always starts in spool dir unless --chdir is set above.
+#       ${BASH_SOURCE[0]} may be unreliable in SLURM, so we hardcode the known path.
+SCRIPT_DIR="/home/weijun/assigned_runs"
 WORKSPACE_DIR="$SCRIPT_DIR/BBO_Work"
 
 mkdir -p "$WORKSPACE_DIR/cec_functions/results"
