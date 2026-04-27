@@ -274,9 +274,38 @@ for ALG in "${SELECTED_ALGOS[@]}"; do
     MUJOCO_LIST_STR="'"${MUJOCO_LIST[*]}"'"
     LASSO_LIST_STR="'"${LASSO_LIST[*]}"'"
 
-    eval "$(conda shell.bash hook)"
-    conda activate BBO_Task
-    set -e
+    # conda 初始化：兼容普通终端和 sbatch 环境
+    # 核心思路：在 nohup 子 shell 里，绕过 conda activate / eval "$(conda shell.bash hook)"
+    #           直接用 BBO_Task 环境的绝对路径 Python，避免一切 conda 初始化问题
+    CONDA_ROOT=""
+    if [[ -n "$CONDA_PREFIX" ]]; then
+      CONDA_ROOT="${CONDA_PREFIX%/envs/*}"
+    elif [[ -d "/home/weijun/miniconda3" ]]; then
+      CONDA_ROOT="/home/weijun/miniconda3"
+    elif [[ -d "/home/weijun/anaconda3" ]]; then
+      CONDA_ROOT="/home/weijun/anaconda3"
+    elif [[ -d "$HOME/miniconda3" ]]; then
+      CONDA_ROOT="$HOME/miniconda3"
+    fi
+
+    _PYTHON="python"
+    if [[ -n "$CONDA_ROOT" && -x "${CONDA_ROOT}/bin/conda" ]]; then
+      BBO_PYTHON="${CONDA_ROOT}/envs/BBO_Task/bin/python"
+      if [[ -x "$BBO_PYTHON" ]]; then
+        _PYTHON="$BBO_PYTHON"
+        log "Using BBO_Task Python: $BBO_PYTHON"
+      else
+        # fallback: 尝试 conda run（某些安装方式 conda run 更稳定）
+        if "${CONDA_ROOT}/bin/conda" run -n BBO_Task python --version > /dev/null 2>&1; then
+          _PYTHON="${CONDA_ROOT}/bin/conda run -n BBO_Task python"
+          log "Using conda run -n BBO_Task"
+        else
+          log "WARNING: BBO_Task Python not found at $BBO_PYTHON, using system python"
+        fi
+      fi
+    else
+      log "WARNING: conda not found, using system python"
+    fi
 
     LOCK_DIR="/tmp/bbo_algo_locks"
     mkdir -p "$LOCK_DIR"
@@ -336,7 +365,7 @@ for ALG in "${SELECTED_ALGOS[@]}"; do
           BUDGET=$(cec_budget "$D")
           WANDB_GROUP="${WANDB_BASE_GROUP}/cec/${FUNC}_${D}d"
           WANDB_ARGS="${WANDB_BASE_ARGS} --wandb-group ${WANDB_GROUP} --wandb-tags ${ALG} cec ${FUNC} ${D}d ${WANDB_RUN_TAG}"
-          python run_bbo_benchmark.py \
+          $_PYTHON run_bbo_benchmark.py \
             --dims "$D" --budget "$BUDGET" --batch 1 \
             --algorithms "$ALG" --functions "$FUNC" \
             --result-dir cec_functions/results \
@@ -354,7 +383,7 @@ for ALG in "${SELECTED_ALGOS[@]}"; do
         BUDGET=$(mujoco_budget "$DIMS")
         WANDB_GROUP="${WANDB_BASE_GROUP}/mujoco/${ENV_NAME}"
         WANDB_ARGS="${WANDB_BASE_ARGS} --wandb-group ${WANDB_GROUP} --wandb-tags ${ALG} mujoco ${ENV_NAME} ${WANDB_RUN_TAG}"
-        python run_bbo_mujoco.py \
+        $_PYTHON run_bbo_mujoco.py \
           --algorithms "$ALG" --environments "$ENV_NAME" \
           --budget "$BUDGET" --batch 1 \
           --result-dir mujoco/results \
@@ -369,7 +398,7 @@ for ALG in "${SELECTED_ALGOS[@]}"; do
       for BENCH in "${LASSO_LIST[@]}"; do
         WANDB_GROUP="${WANDB_BASE_GROUP}/lasso/${BENCH}"
         WANDB_ARGS="${WANDB_BASE_ARGS} --wandb-group ${WANDB_GROUP} --wandb-tags ${ALG} lasso ${BENCH} ${WANDB_RUN_TAG}"
-        python run_bbo_lasso.py \
+        $_PYTHON run_bbo_lasso.py \
           --algorithms "$ALG" --benchmarks "$BENCH" \
           --budget 1000 --batch 1 \
           --result-dir lasso_bench/results \
@@ -382,7 +411,7 @@ for ALG in "${SELECTED_ALGOS[@]}"; do
       log "Running Mopta08 for ${ALG}"
       WANDB_GROUP="${WANDB_BASE_GROUP}/mopta/mopta08"
       WANDB_ARGS="${WANDB_BASE_ARGS} --wandb-group ${WANDB_GROUP} --wandb-tags ${ALG} mopta mopta08 ${WANDB_RUN_TAG}"
-        python run_bbo_mopta.py \
+        $_PYTHON run_bbo_mopta.py \
           --algorithms "$ALG" \
           --budget 1000 --batch 1 \
           --result-dir mopta/results \
