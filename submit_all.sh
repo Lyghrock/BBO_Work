@@ -59,7 +59,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 echo "==========================================================="
-echo "Submitting BBO benchmarks on all 7 algorithms"
+echo "Submitting BBO benchmarks on all 6 algorithms"
 echo "==========================================================="
 if [[ ${#SEED_ARGS[@]} -gt 0 ]]; then
     echo "Seeds:   ${SEED_ARGS[*]}"
@@ -93,6 +93,6 @@ for entry in "${TASK_ID_ALGO[@]}"; do
 done
 
 echo "==========================================================="
-echo "All 7 jobs submitted."
+echo "All 6 jobs submitted."
 echo "Check status: squeue -u \$USER"
 echo "==========================================================="

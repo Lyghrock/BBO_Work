@@ -311,6 +311,7 @@ def run_single(
             algorithm=algorithm,
             metric_name="min_fx",
             step_metric="budget",
+            seed=seed,
         )
         wandb_logger.flush_pending()
 

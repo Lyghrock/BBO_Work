@@ -118,7 +118,7 @@ class WandbLogger:
       - 新 sub-task 独立重置，已失败 run 的数据留在各自 pending 文件中不互相干扰
 
     用法：
-        logger = WandbLogger(config, task_name="swimmer", algo="bo", metric_name="reward")
+        logger = WandbLogger(config, task_name="swimmer", algo="bo", seed=42, metric_name="reward")
         logger.flush_pending()          # sub-task 开始时调用
         logger.log_step(budget=100, reward=42.5)   # mujoco
         logger.log_step(budget=100, min_fx=0.001)  # cec
@@ -135,15 +135,18 @@ class WandbLogger:
         algorithm: str,
         metric_name: str = "reward",
         step_metric: str = "budget",
+        seed: int = None,
     ):
         self._task_name = task_name
         self._algorithm = algorithm
         self._metric_name = metric_name
         self._step_metric = step_metric
+        self._seed = seed
         self._run = None
         self._config = config
         self._disabled = False
-        self._origin = f"{task_name}_{algorithm}"  # 唯一标识一个 sub-task
+        # seed 加入 origin，确保不同 seed 的 run 有独立的 pending 文件和 wandb run
+        self._origin = f"{task_name}_{algorithm}_seed{seed}" if seed is not None else f"{task_name}_{algorithm}"
 
         if not _WANDB_AVAILABLE:
             self._disabled = True
@@ -303,7 +306,8 @@ class WandbLogger:
         os.environ.setdefault("WANDB_DISABLE_CODE_USAGE", "1")
         os.environ.setdefault("WANDB_SYNC_DIR", "/tmp/wandb-sync")
         ts = datetime.now().strftime("%Y%m%d-%H%M%S")
-        run_name = f"{self._task_name}_{self._algorithm}_{ts}"
+        seed_suffix = f"_seed{self._seed}" if self._seed is not None else ""
+        run_name = f"{self._task_name}_{self._algorithm}{seed_suffix}_{ts}"
         try:
             self._run = wandb.init(name=run_name, **init_kwargs)
             self._run.define_metric(self._step_metric, step_sync=True)
