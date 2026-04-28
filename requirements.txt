@@ -21,6 +21,7 @@ nevergrad>=0.6.0
 
 # Reinforcement learning environments
 gymnasium>=0.28.0            # formerly 'gym'
+glfw>=2.10.0
 
 # Utilities
 tqdm>=4.65.0
@@ -28,5 +29,3 @@ joblib>=1.3.0
 matplotlib>=3.7.0
 wandb>=0.15.0                # Weights & Biases logging
 
-# Optional: Scalpel (install separately if needed)
-# pip install scalpel

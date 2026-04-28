@@ -103,6 +103,11 @@ class WandbLogger:
     """
     将 benchmark 的实时进度记录到 wandb。
 
+    wandb config 固定写入三个维度字段：
+      algorithm — 算法名（如 bo, turbo, cmaes）
+      task_name — 任务名（如 hopper, ackley_50d）
+      seed      — 随机种子
+
     metric_name 约定：
       "reward"  — MuJoCo，越大越好（=-best_fx）
       "min_fx"  — CEC 函数，越小越好（=best_fx）
@@ -308,6 +313,16 @@ class WandbLogger:
         ts = datetime.now().strftime("%Y%m%d-%H%M%S")
         seed_suffix = f"_seed{self._seed}" if self._seed is not None else ""
         run_name = f"{self._task_name}_{self._algorithm}{seed_suffix}_{ts}"
+
+        # config 写入三个关键维度，方便 wandb UI 按 algo / function / seed 过滤和分组
+        config_extra = {
+            "algorithm": self._algorithm,
+            "task_name": self._task_name,
+            "seed": self._seed,
+        }
+        existing_config = init_kwargs.pop("config", {}) or {}
+        init_kwargs["config"] = {**existing_config, **config_extra}
+
         try:
             self._run = wandb.init(name=run_name, **init_kwargs)
             self._run.define_metric(self._step_metric, step_sync=True)
