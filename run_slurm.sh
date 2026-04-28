@@ -69,12 +69,18 @@ usage() {
     echo "              0=bo  1=turbo  2=cmaes  3=scalpel"
     echo "              4=hesbo  5=baxus  6=saasbo"
     echo ""
-    echo "Benchmark selection (default: --cec --mujoco --lasso):"
-    echo "  --cec               只跑 CEC"
-    echo "  --mujoco            只跑 MuJoCo"
-    echo "  --lasso             只跑 Lasso-Bench"
-    echo "  --mopta             只跑 Mopta08"
-    echo "  --all               跑全部 benchmark"
+    echo "Benchmark selection (default: all enabled):"
+    echo "  --cec               启用 CEC"
+    echo "  --no-cec            禁用 CEC"
+    echo "  --mujoco            启用 MuJoCo"
+    echo "  --no-mujoco         禁用 MuJoCo"
+    echo "  --lasso             启用 Lasso-Bench"
+    echo "  --no-lasso          禁用 Lasso-Bench"
+    echo "  --mopta             启用 Mopta08"
+    echo "  --no-mopta          禁用 Mopta08"
+    echo "  --all               启用全部 benchmark"
+    echo "  --none              禁用全部 benchmark"
+    echo "  (多个 --xxx 可以叠加，例如 --mujoco --lasso --mopta)"
     echo ""
     echo "Other options:"
     echo "  --no-wandb          禁用 wandb 记录"
@@ -82,9 +88,9 @@ usage() {
     echo "  --seed N [N2 ...]   指定随机种子（不指定时：自动生成 1 个随机 seed）"
     echo ""
     echo "Examples:"
-    echo "  sbatch run_slurm.sh 5                     # 默认跑 cec+mujoco+lasso，1 次随机 seed"
-    echo "  sbatch run_slurm.sh 5 --mujoco            # 只跑 MuJoCo"
-    echo "  sbatch run_slurm.sh 5 --all --seed 0 100 200"
+    echo "  sbatch run_slurm.sh 5                     # 默认跑全部 benchmark"
+    echo "  sbatch run_slurm.sh 5 --mujoco --lasso --mopta  # 只跑这三个"
+    echo "  sbatch run_slurm.sh 5 --no-cec --mopta    # 除 CEC 外跑 mopta"
 }
 
 if [[ -z "$1" || "$1" == "--help" || "$1" == "-h" ]]; then
@@ -106,23 +112,43 @@ ALGO="${ALGOS[TASK_ID]}"
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --cec)
-            RUN_CEC=true; RUN_MUJOCO=false; RUN_LASSO=false; RUN_MOPTA=false
+            RUN_CEC=true
+            shift
+            ;;
+        --no-cec)
+            RUN_CEC=false
             shift
             ;;
         --mujoco)
-            RUN_CEC=false; RUN_MUJOCO=true; RUN_LASSO=false; RUN_MOPTA=false
+            RUN_MUJOCO=true
+            shift
+            ;;
+        --no-mujoco)
+            RUN_MUJOCO=false
             shift
             ;;
         --lasso)
-            RUN_CEC=false; RUN_MUJOCO=false; RUN_LASSO=true; RUN_MOPTA=false
+            RUN_LASSO=true
+            shift
+            ;;
+        --no-lasso)
+            RUN_LASSO=false
             shift
             ;;
         --mopta)
-            RUN_CEC=false; RUN_MUJOCO=false; RUN_LASSO=false; RUN_MOPTA=true
+            RUN_MOPTA=true
+            shift
+            ;;
+        --no-mopta)
+            RUN_MOPTA=false
             shift
             ;;
         --all)
             RUN_CEC=true; RUN_MUJOCO=true; RUN_LASSO=true; RUN_MOPTA=true
+            shift
+            ;;
+        --none)
+            RUN_CEC=false; RUN_MUJOCO=false; RUN_LASSO=false; RUN_MOPTA=false
             shift
             ;;
         --no-wandb)
