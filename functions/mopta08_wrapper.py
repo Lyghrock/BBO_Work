@@ -97,6 +97,7 @@ class Mopta08FuncWrapper:
                     if i > 0:
                         f.write('=')
                     f.write(f"{v:.18e}")
+                f.write('\n')
 
             try:
                 proc = subprocess.run(
