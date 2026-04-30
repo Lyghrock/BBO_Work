@@ -22,6 +22,7 @@ import torch
 from tqdm import tqdm
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "functions/lassobench"))
 
 from functions.lasso_wrapper import (
     create_lasso_benchmark,

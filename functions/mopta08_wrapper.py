@@ -93,8 +93,7 @@ class Mopta08FuncWrapper:
             output_file = workdir / "output.txt"
 
             with open(input_file, 'w') as f:
-                line = ' '.join(f"{v:.18e}" for v in x)
-                f.write(line)
+                f.write('\n'.join(f"{v:.18e}" for v in x))
                 f.write('\n')
 
             try:
@@ -114,9 +113,13 @@ class Mopta08FuncWrapper:
                 )
 
             if proc.returncode != 0:
+                with open(input_file) as f:
+                    input_content = f.read()
                 raise RuntimeError(
-                    "Mopta08 executable failed with return code "
-                    f"{proc.returncode}: {proc.stderr.strip()}"
+                    f"Mopta08 executable failed with return code {proc.returncode}.\n"
+                    f"--- stderr ---\n{proc.stderr.strip()}\n"
+                    f"--- input.txt ---\n{input_content}\n"
+                    f"--- x values (first 5) --- {x[:5]}"
                 )
 
             if output_file.exists():
