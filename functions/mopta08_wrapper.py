@@ -93,8 +93,10 @@ class Mopta08FuncWrapper:
             output_file = workdir / "output.txt"
 
             with open(input_file, 'w') as f:
-                for v in x:
-                    f.write(f"{v:.18e}\n")
+                for i, v in enumerate(x):
+                    if i > 0:
+                        f.write('=')
+                    f.write(f"{v:.18e}")
 
             try:
                 proc = subprocess.run(
