@@ -93,7 +93,7 @@ class Mopta08FuncWrapper:
             output_file = workdir / "output.txt"
 
             with open(input_file, 'w') as f:
-                f.write('\n'.join(f"{v:.18e}" for v in x))
+                f.write(' '.join(f"{v:.18e}" for v in x))
                 f.write('\n')
 
             try:
@@ -115,23 +115,44 @@ class Mopta08FuncWrapper:
             if proc.returncode != 0:
                 with open(input_file) as f:
                     input_content = f.read()
+                files_in_dir = list(workdir.iterdir())
                 raise RuntimeError(
                     f"Mopta08 executable failed with return code {proc.returncode}.\n"
                     f"--- stderr ---\n{proc.stderr.strip()}\n"
+                    f"--- stdout ---\n{proc.stdout.strip()}\n"
                     f"--- input.txt ---\n{input_content}\n"
-                    f"--- x values (first 5) --- {x[:5]}"
+                    f"--- x values (first 5) ---\n{x[:5]}\n"
+                    f"--- files in workdir ---\n{files_in_dir}"
                 )
 
             if output_file.exists():
                 with open(output_file) as f:
-                    lines = [l.strip() for l in f if l.strip()]
-                values = np.array([float(l.split('=', 1)[1].strip()) for l in lines if '=' in l])
-            else:
-                values = np.fromstring(proc.stdout, sep="\n")
+                    raw = f.read()
 
-            if values.size < 1:
+                if '=' in raw:
+                    lines = [l.strip() for l in raw.strip().splitlines() if l.strip()]
+                    values = np.array([float(l.split('=', 1)[1].strip()) for l in lines if '=' in l])
+                else:
+                    lines = [l for l in raw.strip().splitlines() if l.strip()]
+                    values = np.array([float(l) for l in lines])
+
+                if values.size < 1:
+                    raise RuntimeError(
+                        f"output.txt exists but produced no parseable values.\n"
+                        f"--- stdout ---\n{proc.stdout.strip()}\n"
+                        f"--- stderr ---\n{proc.stderr.strip()}\n"
+                        f"--- output.txt content ---\n{raw[:500]}"
+                    )
+            elif proc.stdout.strip():
+                values = np.fromstring(proc.stdout, sep="\n")
+            else:
+                files_in_dir = list(workdir.iterdir())
                 raise RuntimeError(
-                    "Mopta08 output is empty. Expected objective and optional constraints."
+                    f"Mopta08 output is empty. Neither output.txt nor stdout produced values.\n"
+                    f"--- stdout ---\n{proc.stdout.strip()}\n"
+                    f"--- stderr ---\n{proc.stderr.strip()}\n"
+                    f"--- files in workdir ---\n{[str(f) for f in files_in_dir]}\n"
+                    f"--- input.txt content ---\n{open(input_file).read()[:500]}"
                 )
 
             objective = float(values[0])
