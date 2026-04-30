@@ -93,8 +93,8 @@ class Mopta08FuncWrapper:
             output_file = workdir / "output.txt"
 
             with open(input_file, 'w') as f:
-                f.write(' '.join(f"{v:.18e}" for v in x))
-                f.write('\n')
+                for v in x:
+                    f.write(f"{v:.18e}\n")
 
             try:
                 proc = subprocess.run(
@@ -110,6 +110,22 @@ class Mopta08FuncWrapper:
                 raise TimeoutError(
                     f"Mopta08 executable timed out after 300s for input of "
                     f"dimension {x.shape[0]}. The binary may be hanging."
+                )
+
+            # If newline format failed with "End of file", retry space-separated format
+            if proc.returncode != 0 and "End of file" in proc.stderr:
+                with open(input_file, 'w') as f:
+                    f.write(' '.join(f"{v:.18e}" for v in x))
+                    f.write('\n')
+
+                proc = subprocess.run(
+                    [self.executable],
+                    cwd=str(workdir),
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    check=False,
+                    timeout=300,
                 )
 
             if proc.returncode != 0:
