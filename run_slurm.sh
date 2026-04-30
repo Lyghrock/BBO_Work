@@ -40,10 +40,10 @@ declare -a ALGOS=(
 )
 
 #---------------- default benchmark selection ----------------
-RUN_CEC=true
-RUN_MUJOCO=true
-RUN_LASSO=true
-RUN_MOPTA=true
+RUN_CEC=false
+RUN_MUJOCO=false
+RUN_LASSO=false
+RUN_MOPTA=false
 
 WANDB_ENABLED=true
 WANDB_PROJECT="bbo"
