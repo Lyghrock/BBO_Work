@@ -432,7 +432,7 @@ class TurboOptimizer(BaseOptimizer):
     def suggest(self, n_suggestions: int = 1):
         return self.turbo.suggest(n_suggestions)
     
-    def observe(self, x, fx=None):
+    def observe(self, x, fx=None, scores: Optional[np.ndarray] = None):
         if fx is None:
             fx = np.array([self.func_wrapper(xi) for xi in x])
         

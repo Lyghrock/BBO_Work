@@ -136,7 +136,7 @@ class CMAESOptimizer(BaseOptimizer):
                 print(f"CMA-ES ask error: {e}")
             return np.random.uniform(self.lb, self.ub, size=(n_suggestions, self.dims))
     
-    def observe(self, x: np.ndarray, fx: Optional[np.ndarray] = None):
+    def observe(self, x: np.ndarray, fx: Optional[np.ndarray] = None, scores: Optional[np.ndarray] = None):
         """Observe evaluation results
         
         当积累到完整的population后，调用CMA-ES的tell方法

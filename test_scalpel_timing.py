@@ -14,24 +14,151 @@ import os
 import sys
 import time
 import random
+
+# 动态获取当前脚本所在目录
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+# 确保主目录在 path 中
+if SCRIPT_DIR not in sys.path:
+    sys.path.insert(0, SCRIPT_DIR)
+# 添加 scalpel 子目录
+scalpel_dir = os.path.join(SCRIPT_DIR, 'scalpel')
+if scalpel_dir not in sys.path:
+    sys.path.insert(0, scalpel_dir)
+# 添加 baselines 子目录
+baselines_dir = os.path.join(SCRIPT_DIR, 'baselines')
+if baselines_dir not in sys.path:
+    sys.path.insert(0, baselines_dir)
+
 import numpy as np
 import torch
-
-# 添加路径
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), 'scalpel'))
 
 # 禁用 wandb 和其他花里胡哨的东西
 os.environ['WANDB_MODE'] = 'disabled'
 os.environ['NO_WANDB'] = '1'
 
+# ==================== 原版 Benchmark Functions（内联，避免依赖问题）====================
+
+class OriginalAckley:
+    def __init__(self, dims=3):
+        self.dims = dims
+        self.lb, self.ub = -5 * np.ones(dims), 5 * np.ones(dims)
+        self.counter = 0
+
+    def __call__(self, x):
+        self.counter += 1
+        x = np.array(x)
+        result = (-20 * np.exp(-0.2 * np.sqrt(np.inner(x, x) / x.size)) - np.exp(
+            np.cos(2 * np.pi * x).sum() / x.size) + 20 + np.e)
+        return result, 100 / (result + 0.01)
+
+
+class OriginalRastrigin:
+    def __init__(self, dims=3):
+        self.dims = dims
+        self.lb, self.ub = -5 * np.ones(dims), 5 * np.ones(dims)
+        self.counter = 0
+
+    def __call__(self, x, A=10):
+        self.counter += 1
+        x = np.array(x)
+        n = len(x)
+        result = A * n + np.sum(x ** 2 - A * np.cos(2 * np.pi * x))
+        return result, -result
+
+
+class OriginalRosenbrock:
+    def __init__(self, dims=3):
+        self.dims = dims
+        self.lb, self.ub = -5 * np.ones(dims), 5 * np.ones(dims)
+        self.counter = 0
+
+    def __call__(self, x):
+        self.counter += 1
+        x = np.array(x)
+        result = np.sum(100.0 * (x[1:] - x[:-1] ** 2.0) ** 2.0 + (1 - x[:-1]) ** 2.0)
+        return result, 100 / (result / (self.dims * 100) + 0.01)
+
+
+class OriginalGriewank:
+    def __init__(self, dims=3):
+        self.dims = dims
+        self.lb, self.ub = -600 * np.ones(dims), 600 * np.ones(dims)
+        self.counter = 0
+
+    def __call__(self, x):
+        self.counter += 1
+        x = np.array(x)
+        sum_term = np.sum(x ** 2)
+        prod_term = np.prod(np.cos(x / np.sqrt(np.arange(1, len(x) + 1))))
+        result = 1 + sum_term / 4000 - prod_term
+        return result, 10 / (result / self.dims + 0.001)
+
+
+class OriginalMichalewicz:
+    def __init__(self, dims=3):
+        self.dims = dims
+        self.lb, self.ub = 0 * np.ones(dims), np.pi * np.ones(dims)
+        self.counter = 0
+
+    def __call__(self, x, m=10):
+        self.counter += 1
+        x = np.array(x)
+        d = len(x)
+        total = 0
+        for i in range(d):
+            total += np.sin(x[i]) * np.sin((i + 1) * x[i]**2 / np.pi)**(2 * m)
+        return -total, total
+
+
+class OriginalSchwefel:
+    def __init__(self, dims=3):
+        self.dims = dims
+        self.lb, self.ub = -500 * np.ones(dims), 500 * np.ones(dims)
+        self.counter = 0
+
+    def __call__(self, x):
+        self.counter += 1
+        x = np.array(x)
+        dimension = len(x)
+        sum_part = np.sum(-x * np.sin(np.sqrt(np.abs(x))))
+        result = 418.9829 * dimension + sum_part
+        return result, -result / 100
+
+
+class OriginalLevy:
+    def __init__(self, dims=1):
+        self.dims = dims
+        self.lb, self.ub = -10 * np.ones(dims), 10 * np.ones(dims)
+        self.counter = 0
+
+    def __call__(self, x):
+        self.counter += 1
+        x = np.array(x)
+        w = 1 + (x - 1) / 4
+        term1 = (np.sin(np.pi * w[0]))**2
+        term3 = (w[-1] - 1)**2 * (1 + (np.sin(2 * np.pi * w[-1]))**2)
+        term2 = np.sum((w[:-1] - 1)**2 * (1 + 10 * (np.sin(np.pi * w[:-1] + 1))**2))
+        result = term1 + term2 + term3
+        return result, -result
+
+
+ORIGINAL_FUNCS = {
+    'ackley': OriginalAckley,
+    'rastrigin': OriginalRastrigin,
+    'rosenbrock': OriginalRosenbrock,
+    'griewank': OriginalGriewank,
+    'michalewicz': OriginalMichalewicz,
+    'schwefel': OriginalSchwefel,
+    'levy': OriginalLevy,
+}
+
+
 # ==================== 原版 fluxer 包装器 ====================
 
 def run_original_fluxer(func_name, dims, budget, seed, use_continuous=True):
-    """运行原版 fluxer + main.py"""
+    """运行原版 fluxer + main.py（核心逻辑内联）"""
     from scalpel.original.main import (
-        Ackley, Rastrigin, Rosenbrock, Griewank, Michalewicz, Schwefel, Levy,
-        Surrogate, Scalpel, ModelTrainer, tracker
+        Surrogate, Scalpel, ModelTrainer
     )
 
     # 设置随机种子
@@ -45,24 +172,24 @@ def run_original_fluxer(func_name, dims, budget, seed, use_continuous=True):
     print(f"[Original] Using device: {device}", flush=True)
 
     # 初始化函数
-    if func_name == 'ackley':
-        f = Ackley(dims=dims)
-    elif func_name == 'rastrigin':
-        f = Rastrigin(dims=dims)
-    elif func_name == 'rosenbrock':
-        f = Rosenbrock(dims=dims)
-    elif func_name == 'griewank':
-        f = Griewank(dims=dims)
-    elif func_name == 'michalewicz':
-        f = Michalewicz(dims=dims)
-    elif func_name == 'schwefel':
-        f = Schwefel(dims=dims)
-    elif func_name == 'levy':
-        f = Levy(dims=dims)
-    else:
+    if func_name not in ORIGINAL_FUNCS:
         raise ValueError(f"Unknown function: {func_name}")
+    f = ORIGINAL_FUNCS[func_name](dims=dims)
 
-    # 初始化 tracker
+    # 初始化 tracker（简化版）
+    class SimpleTracker:
+        def __init__(self):
+            self.curt_best = float('inf')
+            self.counter = 0
+        def track(self, result):
+            self.counter += 1
+            if result < self.curt_best:
+                self.curt_best = result
+                print(f"[Original] Round {self.counter}: best={self.curt_best:.6f}", flush=True)
+
+    tracker = SimpleTracker()
+
+    # 初始化 Surrogate
     method = 'Continuous-Scalpel' if use_continuous else 'Discrete-Scalpel'
     fx = Surrogate(dims=dims, name=method + '-' + func_name, f=f, iters=budget)
 
@@ -101,10 +228,10 @@ def run_original_fluxer(func_name, dims, budget, seed, use_continuous=True):
         best_idx = np.argmax(input_y2)
         raw_val = f(input_X[best_idx])[0]
         elapsed = time.time() - start_time
-        print(f"[Original] Round {i}/{rounds}: best_f={raw_val:.6f}, time={elapsed:.2f}s, total={len(input_X)} evals", flush=True)
+        print(f"[Original] Round {i}/{rounds}: best_f={raw_val:.6f}, time={elapsed:.2f}s", flush=True)
 
     elapsed_time = time.time() - start_time
-    return elapsed_time, fx.tracker.curt_best, fx.tracker.counter
+    return elapsed_time, tracker.curt_best, tracker.counter
 
 
 # ==================== 包装版 scalpel 测试 ====================
@@ -235,7 +362,7 @@ def run_wrapped_scalpel(func_name, dims, budget, seed, use_continuous=True):
         optimizer._y_score_all = np.concatenate([optimizer._y_score_all, np.array(raw_scores, dtype=np.float32)], axis=0)
 
         elapsed = time.time() - start_time
-        print(f"[Wrapped] Round {i}/{rounds}: best_f={optimizer.best_fx:.6f}, time={elapsed:.2f}s, total={optimizer.call_count} evals", flush=True)
+        print(f"[Wrapped] Round {i}/{rounds}: best_f={optimizer.best_fx:.6f}, time={elapsed:.2f}s", flush=True)
 
     elapsed_time = time.time() - start_time
     return elapsed_time, optimizer.best_fx, optimizer.call_count

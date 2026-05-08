@@ -460,7 +460,7 @@ class BayesianOptimizer(BaseOptimizer):
         except ImportError:
             return np.random.uniform(self.lb, self.ub, size=(n, self.dims))
     
-    def observe(self, x: np.ndarray, fx: Optional[np.ndarray] = None):
+    def observe(self, x: np.ndarray, fx: Optional[np.ndarray] = None, scores: Optional[np.ndarray] = None):
         """观察评估结果"""
         if fx is None:
             fx = np.array([self.func_wrapper(xi) for xi in x])

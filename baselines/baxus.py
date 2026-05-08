@@ -13,6 +13,7 @@ import numpy as np
 import torch
 import gpytorch
 import gc
+from typing import Optional
 from gpytorch.models import ExactGP
 from gpytorch.likelihoods import GaussianLikelihood
 from gpytorch.mlls import ExactMarginalLogLikelihood
@@ -399,7 +400,7 @@ class BAxUSOptimizer(BaseOptimizer):
 
         return np.array(suggestions)
 
-    def observe(self, x: np.ndarray, fx=None):
+    def observe(self, x: np.ndarray, fx=None, scores: Optional[np.ndarray] = None):
         """记录评估结果"""
         if fx is None:
             fx = np.array([self.func_wrapper(xi) for xi in x])

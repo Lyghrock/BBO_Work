@@ -149,7 +149,7 @@ class NeverGradOptimizer(BaseOptimizer):
             traceback.print_exc()
             return np.random.uniform(self.lb, self.ub, size=(n_suggestions, self.dims))
 
-    def observe(self, x: np.ndarray, fx: Optional[np.ndarray] = None):
+    def observe(self, x: np.ndarray, fx: Optional[np.ndarray] = None, scores: Optional[np.ndarray] = None):
         """
         观察评估结果，并将结果反馈给 NeverGrad 优化器
 

@@ -148,7 +148,7 @@ class LAMCTSOptimizer(BaseOptimizer):
 
         return np.atleast_2d(samples)[:n_suggestions]
 
-    def observe(self, x: np.ndarray, fx: Optional[np.ndarray] = None):
+    def observe(self, x: np.ndarray, fx: Optional[np.ndarray] = None, scores: Optional[np.ndarray] = None):
         """
         Receive externally-evaluated results.
 

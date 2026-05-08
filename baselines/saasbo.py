@@ -249,7 +249,7 @@ class SAASBOOptimizer(BaseOptimizer):
             self.model = None
             return False
 
-    def observe(self, x: np.ndarray, fx: Optional[np.ndarray] = None):
+    def observe(self, x: np.ndarray, fx: Optional[np.ndarray] = None, scores: Optional[np.ndarray] = None):
         """记录评估结果"""
         if fx is None:
             fx = np.array([self.func_wrapper(xi) for xi in x])
