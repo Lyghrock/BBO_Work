@@ -1,58 +1,129 @@
-# Scalpel 优化计划（不改变行为）
+# Scalpel 优化计划
 
-## 目标与约束
-- 保留全部现有功能和 BBO 执行模式（接口和默认行为不变）。
-- 只做运行时间优化，不改变优化逻辑或结果。
-- 固定随机种子时尽量保持可复现。
+## 修改记录（2026-05-05）
 
-## 当前设计摘要
-- 入口结构：
-  - [scalpel_core.py](scalpel_core.py) 实现 MCTS rollout 逻辑和代理模型训练。
-  - [scalpel_opt.py](scalpel_opt.py) 把 ScalpelCore 封装为 BaseOptimizer。
-  - [original/main.py](original/main.py) 是移植逻辑的参考实现。
-- 流程（benchmark 模式）：
-  1. suggest() 先生成 warm-start 池（200 个 Latin hypercube 点）。
-  2. warm-start 结束后，每轮：重训代理模型 -> MCTS rollout -> 返回新候选点。
-  3. observe() 保存结果并更新 best。
+### 实施的修复
 
-## 效率问题（封装开销）
-- observe() 中的目标函数重复评估：benchmark 已经给了 fx，但 _raw_score() 又会调用一次底层目标函数来恢复 score，造成昂贵函数的重复计算。
-- 训练频率偏高：warm-start 后每次 suggest() 都训练，如果 benchmark 以小批量频繁调用，就会比原版“每 20 点训练一次”更频繁。
-- 数组反复拼接：在循环中对 _X_all / _y_score_all 使用 np.concatenate，会导致整体时间复杂度接近 O(n^2)。
+#### 1. 修复 test_functions.py — 返回 (f, score) tuple
+**文件**: `functions/test_functions.py`
 
-## 并行性评估
-- 核心 rollout 过程是串行的：每一步依赖上一步的 UCT 选择，单条 rollout 无法安全并行而不改变语义。
-- 可并行的安全点：
-  - 多起点 rollout（非 rastrigin/ackley/levy 的分支）可以用多个独立 ScalpelCore 并行，然后合并候选点。
-  - 模型的 predict 已经批量化，应继续保持批量输入。
+原版 `scalpel/original/main.py` 中的 benchmark 函数返回 `(f, score)` tuple，其中 score 用于 MCTS 训练（越大越好）。
 
-## 优化方案（保持行为）
-1. 避免 raw-score 重算（跨进程不混用）
-   - 在 benchmark 侧把 raw_score 记录并传入 observe()，避免 _raw_score() 再次调用底层函数。
-   - raw_score 只能在本进程内使用，不跨进程共享，避免不同进程数据混淆。
-   - 若 raw_score 不可得，保留当前 fallback 行为。
+| 函数 | 原 score 计算 | 现已修复 |
+|------|-------------|---------|
+| Ackley | `100 / (f + 0.01)` | ✓ |
+| Rastrigin | `-f` | ✓ |
+| Rosenbrock | `100 / (f / (dims * 100) + 0.01)` | ✓ |
+| Griewank | `10 / (f / dims + 0.001)` | ✓ |
+| Michalewicz | `f` (已是负值，越大越好) | ✓ |
+| Schwefel | `-f / 100` | ✓ |
+| Levy | `-f` | ✓ |
 
-2. 训练频率调整到每 10 个点一次
-   - 参考原版“每 20 点一训”，改成“每 10 点一训”。
-   - 训练触发条件以新数据累计为准，避免对同一批数据反复重训。
+#### 2. 修复 FuncWrapper — 存储原始 score
+**文件**: `run_bbo_benchmark.py`
 
-3. 降低数据追加成本（已实现）
-   - 先用 Python 列表累计，再批量堆叠进 numpy 数组。
-   - 避免循环里反复 np.concatenate 造成的 O(n^2)。
+新增 `get_last_scores()` 方法，返回最近一次批量调用的所有原始 score。
 
-4. 小型 numpy 操作批量化（保持 device 位置不变）
-   - data_process() 可用结构化数组或广播掩码减少 Python 层循环。
-   - most_visit_node() 使用 set 追踪已访问点，减少 np.all 的重复扫描。
-   - 仅对 CPU 侧 numpy 数据做优化，不强制把 GPU 上的数据搬回 CPU。
+#### 3. 重构 ScalpelOptimizer.optimize() — 每20点批量训练
+**文件**: `scalpel/scalpel_opt.py`
 
-## Rollout 逻辑分析与潜在改动点（暂不实施）
-- rollout 的核心循环是串行依赖 UCT 选择结果，单条 rollout 无法直接并行。
-- 对于多起点分支（非 rastrigin/ackley/levy），存在并行多个独立 rollout 的空间，但会影响随机性和可复现性。
-- rollout 中的 boards / boards_rand 生成和去重在 Python 层循环较多，是潜在优化点。
-- model.predict 目前是批量调用，仍应保持批量化。
+**关键改动**:
+- 移除 `_TRAIN_INTERVAL` 和 pending 队列机制
+- 改为与原版 `main.py` 完全一致的每 20 点批量训练 + rollout 模式
+- 批量评估减少接口开销
 
-## 风险与验证
-- 任何涉及随机性或训练节奏的改动，都可能影响可复现性，默认必须保持一致。
-- 建议做轻量回归验证：
-  - 相同 seed、函数、预算：比较 best_fx 的轨迹或最终值是否在容差内。
-  - 统计运行时间和目标函数调用次数的变化。
+**原流程**:
+```python
+# 每次 evaluate 1 点，逐点处理
+while total_calls < budget:
+    x = optimizer.suggest(1)
+    fx = evaluate(x)
+    optimizer.observe(x, fx)
+    if len(pending) >= 10:  # interval 机制
+        train_model()
+```
+
+**新流程**:
+```python
+# 批量 evaluate，每 20 点训练一次
+while total_calls < budget:
+    # 训练模型
+    model = trainer.train(all_X, all_y)
+    # MCTS rollout 生成 ~20 点
+    new_X = optimizer.rollout(...)
+    # 批量 evaluate
+    for xi in new_X:
+        fx = evaluate(xi)
+    # 追加数据
+    all_X = concatenate([all_X, new_X])
+    all_y = concatenate([all_y, new_scores])
+```
+
+#### 4. 添加 BaseOptimizer.observe() scores 参数
+**文件**: `baselines/base.py`
+
+新增可选参数 `scores`，允许传入原始 score。
+
+---
+
+## 时间对比测试
+
+### 测试脚本
+
+**Python 脚本**: `test_scalpel_timing.py`
+**Shell 脚本**: `test_scalpel_timing.sh`
+
+### 使用方法
+
+```bash
+# 基本用法
+bash test_scalpel_timing.sh -f ackley -d 10 -b 200 -s 42
+
+# 测试特定函数
+bash test_scalpel_timing.sh -f griewank -d 50 -b 1000 -s 42
+
+# 只测试原版
+bash test_scalpel_timing.sh -f ackley -d 10 -m original
+
+# 只测试包装版
+bash test_scalpel_timing.sh -f ackley -d 10 -m wrapped
+
+# 使用连续模式
+bash test_scalpel_timing.sh -f ackley -d 10 -c
+```
+
+### 参数说明
+
+| 参数 | 说明 | 默认值 |
+|------|------|--------|
+| `-f, --func` | 测试函数 | ackley |
+| `-d, --dims` | 问题维度 | 10 |
+| `-b, --budget` | 评估预算 | 200 |
+| `-s, --seed` | 随机种子 | 42 |
+| `-c, --continuous` | 使用连续模式 | False |
+| `-m, --mode` | 测试模式 (original/wrapped/both) | both |
+
+### 测试内容
+
+1. **原版 fluxer + main.py**: 直接运行原始实现
+2. **包装版 scalpel_core + scalpel_opt.py**: 运行包装后的实现
+3. **对比指标**:
+   - 总运行时间
+   - 最终 best_f(x)
+   - 评估次数
+
+### 注意事项
+
+- 已禁用 wandb 和其他日志工具
+- 两边使用相同的随机种子
+- 两边使用相同的 GPU 配置
+- 测试包括初始化 200 个点的开销
+
+---
+
+## 待验证项
+
+- [ ] 原版和包装版的 best_fx 是否在合理范围内（由于随机性，可能不完全一致）
+- [ ] 两版的运行时间差异是否在可接受范围内
+- [ ] 批量 evaluate 是否正确工作
+- [ ] score 计算是否正确传递给 MCTS

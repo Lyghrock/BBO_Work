@@ -355,16 +355,24 @@ class FuncWrapper:
         self.is_minimizing = is_minimizing
         self.sign = 1.0 if is_minimizing else -1.0
         self.call_count = 0
+        self._last_scores = []  # 存储每次调用的原始 score（用于 MCTS）
 
     def __call__(self, x):
         """评估函数"""
         self.call_count += 1
         result = self.func(x)
         if isinstance(result, tuple):
-            fx = result[0]
+            fx, score = result[0], result[1]
         else:
-            fx = result
+            fx, score = result, result
+        self._last_scores.append(score)
         return self.sign * fx
+
+    def get_last_scores(self):
+        """返回最近一次批量调用的所有原始 score"""
+        scores = np.array(self._last_scores, dtype=np.float32)
+        self._last_scores.clear()
+        return scores
 
     def gen_random_inputs(self, n: int) -> np.ndarray:
         """生成随机输入"""
@@ -451,7 +459,9 @@ def run_single_algorithm(
                     n_suggest = min(batch_size, budget - total_calls)
                     x_suggest = optimizer.suggest(n_suggest)
                     fx_suggest = np.array([func_wrapper(xi) for xi in x_suggest])
-                    optimizer.observe(x_suggest, fx_suggest)
+                    # 获取原始 score（用于 MCTS 训练）
+                    scores = func_wrapper.get_last_scores()
+                    optimizer.observe(x_suggest, fx_suggest, scores=scores)
                     total_calls += n_suggest
 
                     if func_wrapper.is_minimizing:

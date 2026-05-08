@@ -52,22 +52,23 @@ class BaseOptimizer(ABC):
         """
         pass
     
-    def observe(self, x: np.ndarray, fx: Optional[np.ndarray] = None):
+    def observe(self, x: np.ndarray, fx: Optional[np.ndarray] = None, scores: Optional[np.ndarray] = None):
         """
         观察评估结果
-        
+
         Args:
             x: 评估的点 (n x dims)
             fx: 评估的函数值 (n,), 如果为None则自动计算
+            scores: 原始 score (n,) = 原始 score（用于 MCTS 训练，可选）
         """
         if fx is None:
             fx = np.array([self.sign * self.func_wrapper(xi) for xi in x])
-        
+
         for xi, fi in zip(x, fx):
             self.history_x.append(xi)
             self.history_fx.append(fi)
             self.call_count += 1
-            
+
             # 更新最优解
             if self.is_minimizing:
                 if fi < self.best_fx:

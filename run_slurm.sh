@@ -231,10 +231,10 @@ echo "[$(date)] WORKSPACE=$WORKSPACE_DIR"
 #---------------- helper functions ----------------
 cec_budget() {
     case $1 in
-        20)  echo 2000 ;;
-        50)  echo 7000 ;;
-        100) echo 12000 ;;
-        *)   echo 5000 ;;
+        20)   echo 2000 ;;
+        100)  echo 12000 ;;
+        1000) echo 100000 ;;
+        *)    echo 5000 ;;
     esac
 }
 
@@ -273,7 +273,7 @@ fi
 if [[ "$RUN_CEC" == true ]]; then
     log "Running CEC for $ALGO"
     for FUNC in "${ALL_FUNCS[@]}"; do
-        for D in 20 50 100; do
+        for D in 20 100 1000; do
             BUDGET=$(cec_budget "$D")
             WANDB_GROUP="${WANDB_BASE_GROUP}/cec/${FUNC}_${D}d"
             WANDB_ARGS="${WANDB_BASE_ARGS} --wandb-group ${WANDB_GROUP} --wandb-tags ${ALGO} cec ${FUNC} ${D}d ${WANDB_RUN_TAG}"
