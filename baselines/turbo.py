@@ -118,7 +118,7 @@ class TuRBO:
                  n_trusts: int = 1,
                  dims: int = None,
                  max_evals: int = 1000,
-                 batch_size: int = 4,
+                 batch_size: int = 8,
                  use_gpu: bool = True,
                  device: torch.device = None):
         self.func_wrapper = func_wrapper
